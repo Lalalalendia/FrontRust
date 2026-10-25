@@ -62,9 +62,24 @@ function snapshot(){
     skippedDraws:engine.mp_skipped_draws(),
     clicks:engine.mp_click_count(),rects:sceneRects(),ops:sceneOps()};
 }
+function validateScene(scene){
+  // Refuse incomplete snapshots BEFORE changing the displayed framebuffer.
+  if(scene.skippedDraws!==0)throw Error('Partial Masonry scene: '+scene.skippedDraws+' unsupported operations');
+  if(scene.rects.length>128||scene.ops.length>256)throw Error('Oversized Masonry scene');
+  for(const r of scene.rects){
+    if(r.path.length>512)throw Error('Oversized Masonry path');
+    if(![...r.local,...r.radii,...r.matrix].every(Number.isFinite))
+      throw Error('Nonfinite Masonry geometry');
+    for(const command of r.path){
+      if(![1,2,3,4,5].includes(command.kind)||!command.args.every(Number.isFinite))
+        throw Error('Unsupported or nonfinite Masonry PathEl');
+    }
+  }
+}
 function paint(){
   scheduled=false;
   const scene=snapshot();
+  validateScene(scene);
   ctx.fillStyle='#f8fbff';
   ctx.fillRect(0,0,canvas.width,canvas.height);
   // The scene is an ORDERED command stream. A clip is an actual Canvas
@@ -138,7 +153,6 @@ function paint(){
   el('rectangles').textContent=String(scene.rects.length)+' / '+scene.ops.length+' ops';
   el('access').textContent=String(scene.accessNodes);
   el('clicks').textContent=String(scene.clicks);
-  if(scene.skippedDraws!==0)throw Error('Partial Masonry scene: '+scene.skippedDraws+' unsupported operations');
   lastSnapshot=scene;
 }
 function requestPaint(){if(scheduled)return;scheduled=true;requestAnimationFrame(paint);}
@@ -175,7 +189,8 @@ try{
   el('resize').addEventListener('click',()=>resize(canvas.width===320?400:320,canvas.height===240?300:240));
   requestPaint();
   el('status').textContent='Real Rust/WASM RenderRoot';
-  window.__masonryProbe={snapshot,resize,get lastSnapshot(){return lastSnapshot}};
+  // Exposed only for deterministic browser harness assertions.
+  window.__masonryProbe={snapshot,resize,validateScene,get lastSnapshot(){return lastSnapshot}};
 }catch(err){
   el('status').textContent='ERROR: '+err.message;
   console.error(err);

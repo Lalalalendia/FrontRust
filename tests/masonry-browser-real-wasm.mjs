@@ -113,6 +113,75 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     },rendered);
     assert.ok(samples.some(c=>c[0]>150&&c[1]<120&&c[2]>90),
       'Rotated real Masonry BezPath stroke did not paint the expected Canvas pixels');
+
+    // Real upstream Masonry Canvas recorded two distinct Bezier strokes in
+    // Rust. Evaluate the independent Bernstein midpoint and sample actual
+    // Chromium/Firefox Canvas pixels, both ON and OFF each curve.
+    const getBezier=(rgb,kind)=>{
+      const r=first.rects.find(r=>(r.rgba&255)===rgb[0]
+        &&((r.rgba>>>8)&255)===rgb[1]
+        &&((r.rgba>>>16)&255)===rgb[2]
+        &&r.path.some(p=>p.kind===kind));
+      assert.ok(r,'Real Masonry Canvas '+(kind===3?'QuadTo':'CurveTo')+' absent from scene');
+      assert.equal(r.path.length,2);
+      const start=r.path[0],curve=r.path[1];
+      assert.equal(start.kind,1);
+      assert.equal(curve.kind,kind);
+      const p=start.args,k=curve.args;
+      const local=kind===3
+        ?{x:(p[0]+2*k[0]+k[2])/4,y:(p[1]+2*k[1]+k[3])/4}
+        :{x:(p[0]+3*k[0]+3*k[2]+k[4])/8,y:(p[1]+3*k[1]+3*k[3]+k[5])/8};
+      const [a,b,c,d,e,f]=r.matrix;
+      return {r,local,position:{x:a*local.x+c*local.y+e,y:b*local.x+d*local.y+f}};
+    };
+    const quad=getBezier([10,215,235],3),cubic=getBezier([240,165,45],4);
+    assert.ok(Math.abs(quad.local.x-55)<0.001&&Math.abs(quad.local.y-30)<0.001);
+    assert.ok(Math.abs(cubic.local.x-55.25)<0.001&&Math.abs(cubic.local.y-14.5)<0.001);
+    const pixelProbes=await page.evaluate(({positions,offCurve})=>{
+      const ctx=document.querySelector('#masonry-canvas').getContext('2d');
+      const get=(x,y)=>Array.from(ctx.getImageData(Math.floor(x),Math.floor(y),1,1).data);
+      const sample=({x,y})=>{
+        const pixels=[];
+        for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++)pixels.push(get(x+dx,y+dy));
+        return pixels;
+      };
+      return {
+        on:positions.map(sample),
+        off:offCurve.map(({x,y})=>get(x,y))
+      };
+    },{
+      positions:[quad.position,cubic.position],
+      offCurve:[
+        {x:quad.position.x,y:quad.position.y+18},
+        {x:cubic.position.x,y:cubic.position.y+30}
+      ]
+    });
+    const hits=(pixels,rgb)=>pixels.some(c=>c.slice(0,3).every((v,i)=>Math.abs(v-rgb[i])<=2));
+    assert.ok(hits(pixelProbes.on[0],[10,215,235]),
+      'QuadTo midpoint is not cyan in browser pixels: '+JSON.stringify(pixelProbes.on[0]));
+    assert.ok(hits(pixelProbes.on[1],[240,165,45]),
+      'CurveTo midpoint is not amber in browser pixels: '+JSON.stringify(pixelProbes.on[1]));
+    assert.ok(!hits([pixelProbes.off[0]],[10,215,235]),'QuadTo painted away from expected curve');
+    assert.ok(!hits([pixelProbes.off[1]],[240,165,45]),'CurveTo painted away from expected curve');
+
+    // Negative browser gate: paint preflight must refuse an intentionally
+    // partial/oversized scene instead of presenting incomplete graphics.
+    const rejected=await page.evaluate(()=>{
+      const original=window.__masonryProbe.snapshot();
+      const results=[];
+      for(const mutation of [
+        {...original,skippedDraws:1},
+        {...original,rects:original.rects.map((r,i)=>i===0
+          ? {...r,path:Array.from({length:513},()=>({kind:2,args:[0,0,0,0,0,0]}))}
+          :r)}
+      ]){
+        try{window.__masonryProbe.validateScene(mutation);results.push('ACCEPTED');}
+        catch(e){results.push(String(e.message));}
+      }
+      return results;
+    });
+    assert.match(rejected[0],/Partial Masonry scene/);
+    assert.match(rejected[1],/Oversized Masonry path/);
     const canvas=page.locator('#masonry-canvas');
     const box=await canvas.boundingBox();
     assert.ok(box);
@@ -130,7 +199,7 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.ok(resized.rects.some(r=>(r.rgba&255)===70));
     assert.deepEqual(errors,[]);
     await page.screenshot({path:'test-results/masonry-'+name+'.png',fullPage:true});
-    console.log('PASS '+name+' real Masonry R3 nested clips, rotated BezPath pixels, ButtonPress and resize');
+    console.log('PASS '+name+' real Masonry R3b QuadTo+CurveTo midpoint pixels, negative fail-closed, nested clips and ButtonPress');
   }catch(error){
     await page.screenshot({path:'test-results/masonry-'+name+'-FAIL.png',fullPage:true}).catch(()=>{});
     console.error('FAIL '+name,error.stack,errors);throw error;

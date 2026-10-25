@@ -91,6 +91,44 @@ assert.ok(Math.abs(matrix[1])>0.1&&Math.abs(matrix[2])>0.1,
 const arrowStroke=ops.find(o=>o.kind===2&&o.shape===arrowIndex);
 assert.ok(arrowStroke,'real Masonry arrow must have a stroke');
 assert.equal(arrowStroke.strokeCap,1,'open arrow Round caps were not preserved');
+
+const quadColor=encode(10,215,235),cubicColor=encode(240,165,45);
+const findCurve=(rgba,kind)=>{
+  const i=rects.findIndex((r,index)=>r.rgba===rgba&&
+    Array.from({length:e.mp_rect_path_count(index)},(_,j)=>e.mp_rect_path_kind(index,j)).includes(kind));
+  assert.ok(i>=0,'Real Rust Masonry Canvas curve missing kind='+kind);
+  const n=e.mp_rect_path_count(i);
+  assert.equal(n,2,'Each curve is one move and one Bezier segment');
+  const p=Array.from({length:n},(_,j)=>({
+    kind:e.mp_rect_path_kind(i,j),
+    args:Array.from({length:6},(_,k)=>e.mp_rect_path_arg(i,j,k))
+  }));
+  assert.equal(p[0].kind,1);
+  assert.equal(p[1].kind,kind);
+  assert.ok(p.every(segment=>segment.args.every(Number.isFinite)));
+  const m=[e.mp_rect_matrix_a(i),e.mp_rect_matrix_b(i),e.mp_rect_matrix_c(i),
+    e.mp_rect_matrix_d(i),e.mp_rect_matrix_e(i),e.mp_rect_matrix_f(i)];
+  assert.ok(m.every(Number.isFinite));
+  const op=ops.find(o=>o.kind===2&&o.shape===i);
+  assert.ok(op&&op.strokeWidth===5,'Real Canvas curve must be a five-pixel Rust stroke');
+  return {i,p,m};
+};
+const quad=findCurve(quadColor,3),cubic=findCurve(cubicColor,4);
+const q=quad.p[1].args,k=cubic.p[1].args;
+const quadCenter=[
+  (quad.p[0].args[0]+2*q[0]+q[2])/4,
+  (quad.p[0].args[1]+2*q[1]+q[3])/4
+];
+const cubicCenter=[
+  (cubic.p[0].args[0]+3*k[0]+3*k[2]+k[4])/8,
+  (cubic.p[0].args[1]+3*k[1]+3*k[3]+k[5])/8
+];
+assert.ok(Math.abs(quadCenter[0]-55)<0.001&&Math.abs(quadCenter[1]-30)<0.001);
+assert.ok(Math.abs(cubicCenter[0]-55.25)<0.001&&Math.abs(cubicCenter[1]-14.5)<0.001);
+assert.equal(e.mp_skipped_draws(),0,'Bezier curves must not be silently discarded');
+// WASM exports reject out-of-range commands; they never alias a different path.
+assert.equal(e.mp_rect_path_kind(quad.i,9999),-1);
+assert.ok(Number.isNaN(e.mp_rect_path_arg(cubic.i,9999,0)));
 const target=rects.find(r=>r.rgba===brown);
 assert.ok(target,'button child surface from Masonry missing');
 assert.ok(target.width>0&&target.height>0,'button surface has no layout');
@@ -104,4 +142,4 @@ assert.deepEqual([e.mp_width(),e.mp_height()],[400,300]);
 rects=getRects();
 assert.ok(rects.some(r=>r.rgba===blue));
 assert.ok(rects.some(r=>r.rgba===brown));
-console.log('PASS R3 real Masonry nested Portal clip depth, transformed BezPath, Stroke/Fill, ButtonPress and resize');
+console.log('PASS R3b native Masonry Canvas QuadTo/CurveTo ABI, nested clips, transformed BezPath, ButtonPress and resize');

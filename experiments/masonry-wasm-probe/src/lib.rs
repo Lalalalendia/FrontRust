@@ -22,8 +22,8 @@ mod browser_host {
     use masonry::core::{NewWidget, PropertySet, Widget, WidgetTag, WindowEvent};
     use masonry::imaging::record::Clip;
     use masonry::dpi::{PhysicalPosition, PhysicalSize};
-    use masonry::imaging::record::{Command, Draw, Geometry, Scene};
-    use masonry::kurbo::{Affine, Cap, Join, PathEl, Point, Shape as _, Vec2};
+    use masonry::imaging::{Painter, record::{Command, Draw, Geometry, Scene}};
+    use masonry::kurbo::{Affine, BezPath, Cap, Join, PathEl, Point, Shape as _, Stroke, Vec2};
     use masonry::layout::{AsUnit, Length};
     use masonry::peniko::{Brush, Color, Fill};
     use masonry::properties::{Background, BorderColor, BorderWidth, ContentColor, CornerRadius, Dimensions};
@@ -33,7 +33,7 @@ mod browser_host {
         PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
         PointerType,
     };
-    use masonry::widgets::{Button, ButtonPress, DisclosureButton, Flex, Portal, SizedBox};
+    use masonry::widgets::{Button, ButtonPress, Canvas, DisclosureButton, Flex, Portal, SizedBox};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::Arc;
@@ -139,6 +139,7 @@ mod browser_host {
         accessibility_nodes: i32,
         skipped_draws: i32,
         clicks: Rc<Cell<i32>>,
+        curve_tag: WidgetTag<Canvas>,
     }
 
     impl BrowserHost {
@@ -160,6 +161,7 @@ mod browser_host {
             // The tagged disclosure arrow is a REAL Masonry BezPath stroke.
             // Applying an affine widget transform tests the full matrix pipeline.
             let arrow_tag: WidgetTag<DisclosureButton> = WidgetTag::unique();
+            let curve_tag: WidgetTag<Canvas> = WidgetTag::unique();
             let root_widget = Flex::column()
                 .with_fixed(tile(Color::from_rgb8(70, 120, 210), true))
                 .with_fixed(NewWidget::new(Button::new(tile(Color::from_rgb8(195, 145, 105), false))))
@@ -172,14 +174,24 @@ mod browser_host {
                     ))
                     .with_props(PropertySet::one(Dimensions::fixed(65.px(), 50.px())))
                 )
-                .with_fixed(
-                    NewWidget::new(DisclosureButton::new(false))
-                        .with_tag(arrow_tag)
-                        .with_props(
-                            PropertySet::new()
-                                .with(Dimensions::fixed(64.px(),64.px()))
-                                .with(ContentColor::new(Color::from_rgb8(230,50,180)))
-                        )
+                // Keep the 80px-tall curve widget within the initial 240px
+                // browser canvas: place it BESIDE the 64px disclosure arrow.
+                .with_fixed(Flex::row()
+                    .with_fixed(
+                        NewWidget::new(DisclosureButton::new(false))
+                            .with_tag(arrow_tag)
+                            .with_props(
+                                PropertySet::new()
+                                    .with(Dimensions::fixed(64.px(),64.px()))
+                                    .with(ContentColor::new(Color::from_rgb8(230,50,180)))
+                            )
+                    )
+                    .with_fixed(
+                        NewWidget::new(Canvas::default())
+                            .with_tag(curve_tag)
+                            .with_props(PropertySet::one(Dimensions::fixed(120.px(),80.px())))
+                    )
+                    .prepare()
                 )
                 .prepare();
             let clicks = Rc::new(Cell::new(0_i32));
@@ -208,10 +220,27 @@ mod browser_host {
                 .then_rotate(0.45)
                 .then_translate(-center);
             root.edit_widget_with_tag(arrow_tag, |mut arrow| arrow.set_transform(matrix));
+            // This is an upstream Masonry::Canvas widget. Painter stores both
+            // Bezier paths in its real retained Scene; JS never fabricates them.
+            root.edit_widget_with_tag(curve_tag, |mut curve| {
+                Canvas::update_scene(&mut curve, |_ctx, scene, _size| {
+                    let mut painter = Painter::new(scene);
+                    let mut quadratic = BezPath::new();
+                    quadratic.move_to((8.0, 60.0));
+                    quadratic.quad_to((55.0, 0.0), (102.0, 60.0));
+                    painter.stroke(&quadratic, &Stroke::new(5.0),
+                        Color::from_rgb8(10, 215, 235)).draw();
+                    let mut cubic = BezPath::new();
+                    cubic.move_to((8.0, 70.0));
+                    cubic.curve_to((30.0, -4.0), (80.0, -4.0), (104.0, 70.0));
+                    painter.stroke(&cubic, &Stroke::new(5.0),
+                        Color::from_rgb8(240, 165, 45)).draw();
+                });
+            });
             root.handle_window_event(WindowEvent::EnableAccessTree);
             let mut host = Self {
                 root, rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
-                accessibility_nodes: 0, skipped_draws: 0, clicks,
+                accessibility_nodes: 0, skipped_draws: 0, clicks, curve_tag,
             };
             host.redraw();
             host
@@ -328,6 +357,25 @@ mod browser_host {
             let idx = self.rects.len() as i32;
             self.rects.push(record);
             self.ops.push(SceneOp { kind, shape: idx, stroke_width, stroke_join, miter_limit, stroke_cap });
+        }
+
+        #[cfg(test)]
+        fn inject_oversized_path_for_fidelity_test(&mut self) {
+            // This tests the ACTUAL RenderRoot->Scene serializer, not just
+            // shape_record in isolation: a >512 PathEl draw MUST be omitted
+            // and counted as unsupported, not approximated as its bounding box.
+            self.root.edit_widget_with_tag(self.curve_tag, |mut curve| {
+                Canvas::update_scene(&mut curve, |_ctx, scene, _size| {
+                    let mut path = BezPath::new();
+                    path.move_to((5.0, 20.0));
+                    for i in 0..513 {
+                        path.line_to((5.0 + (i % 100) as f64, 20.0));
+                    }
+                    Painter::new(scene).stroke(&path, &Stroke::new(5.0),
+                        Color::from_rgb8(10, 215, 235)).draw();
+                });
+            });
+            self.redraw();
         }
 
         pub fn resize(&mut self, width: u32, height: u32) -> i32 {
@@ -665,6 +713,44 @@ mod browser_host {
         use super::*;
 
         #[test]
+        fn rejects_invalid_or_oversized_path_in_real_geometry_serializer() {
+            let white = Color::from_rgb8(255,255,255);
+            let empty = BezPath::new();
+            assert!(shape_record(&Geometry::Path(empty), &Affine::IDENTITY, white).is_none());
+
+            let mut nan = BezPath::new();
+            nan.move_to((0.0, 1.0));
+            nan.quad_to((f64::NAN, 2.0), (5.0, 4.0));
+            assert!(shape_record(&Geometry::Path(nan), &Affine::IDENTITY, white).is_none());
+
+            let mut at_limit = BezPath::new();
+            at_limit.move_to((0.0, 0.0));
+            for i in 0..511 {
+                at_limit.line_to((i as f64, 1.0));
+            }
+            let accepted = shape_record(&Geometry::Path(at_limit.clone()), &Affine::IDENTITY, white)
+                .expect("512 path commands must be supported");
+            assert_eq!(accepted.path.len(),512);
+            at_limit.line_to((513.0, 1.0));
+            assert!(shape_record(&Geometry::Path(at_limit), &Affine::IDENTITY, white).is_none(),
+                "513 PathEl must fail closed instead of drawing a bounding box");
+        }
+
+        #[test]
+        fn real_renderroot_rejects_oversized_path_without_drawing_it() {
+            let mut h = BrowserHost::new(320,240);
+            assert_eq!(h.skipped_draws,0);
+            h.inject_oversized_path_for_fidelity_test();
+            assert!(h.skipped_draws > 0,"missing unsupported-path diagnostic");
+            let cyan = Color::from_rgb8(10,215,235).to_rgba8().to_u32();
+            assert!(!h.rects.iter().any(|r| r.rgba == cyan),
+                "an unsupported 513-element path leaked into the painter stream");
+            assert!(h.rects.iter().any(|r|
+                r.rgba == Color::from_rgb8(70,120,210).to_rgba8().to_u32()),
+                "valid independent widgets must still be retained");
+        }
+
+        #[test]
         fn headless_renderroot_two_widgets_and_resize() {
             let mut h = BrowserHost::new(320, 240);
             assert!(h.scene_layers > 0);
@@ -701,6 +787,14 @@ mod browser_host {
             assert!(h.ops.iter().any(|op| op.kind==2 && op.stroke_cap==1
                 && op.shape>=0 && h.rects[op.shape as usize].rgba==arrow_color),
                 "open arrow stroke must preserve round caps");
+            let cyan = Color::from_rgb8(10,215,235).to_rgba8().to_u32();
+            let amber = Color::from_rgb8(240,165,45).to_rgba8().to_u32();
+            assert!(h.rects.iter().any(|r| r.rgba == cyan
+                && r.path.iter().any(|command| command.kind == 3)),
+                "actual Masonry Canvas QuadTo curve was not serialized");
+            assert!(h.rects.iter().any(|r| r.rgba == amber
+                && r.path.iter().any(|command| command.kind == 4)),
+                "actual Masonry Canvas CurveTo curve was not serialized");
             assert!(h.resize(400, 300) >= 2);
             assert_eq!(h.size(), (400,300));
         }

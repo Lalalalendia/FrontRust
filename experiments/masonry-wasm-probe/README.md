@@ -74,3 +74,13 @@ and that unsupported operation count remains zero.
 - [R3: native Rust + WASM release + wasm-bindgen + Node + Chromium/Firefox SUCCESS](https://github.com/Lalalalendia/FrontRust/actions/runs/40201480153). Artifact `masonry-browser-evidence` contains both browser screenshots and `masonry-real-wasm` the compiled binary.
 - [PR #1 remains Draft](https://github.com/Lalalalendia/FrontRust/pull/1); no assumption of production readiness or a completed merge.
 - R3b: exercise synthetic or widget-generated QuadTo/CurveTo with precise pixel conformance and negative fail-closed cases. R4: focus ownership, browser keyboard dispatch, IME composition and AccessKit→DOM accessibility projection.
+
+## R3b — QuadTo/CurveTo pixel conformance and fail-closed validation
+
+Two separate actual Rust `kurbo::BezPath` strokes are stored through upstream `Canvas::update_scene` and replayed by real Masonry `RenderRoot`: cyan `quad_to((55,0),(102,60))` and amber `curve_to((30,-4),(80,-4),(104,70))`. The `Canvas` occupies the right-hand 120×80 part of a Masonry `Flex::row` beside the existing transformed `DisclosureButton`, within the original 320×240 WASM framebuffer.
+
+Native Rust and Node independently assert the numeric `PathEl` payloads and curve colors. Chromium and Firefox compute a quadratic/cubic Bernstein midpoint from the transported control points, sample 5×5 neighborhoods at those transformed coordinates, and verify off-curve pixels do *not* match the stroke colors. Merely exporting a Path opcode does not pass.
+
+The bounded serialization rule is 1–512 `PathEl` per shape; empty, nonfinite or 513-element paths are rejected. Rust unit tests check the boundary and an integration test injects a 514-element path through an actual Masonry `Canvas`, requires a nonzero unsupported counter, and verifies that the invalid shape was not sent to the browser. Browser canvas preflight rejects incomplete/oversized scene data **before** changing the framebuffer; negative browser tests exercise both rejection cases.
+
+This remains a narrowly verified scene subset, not guaranteed SVG, CSS or publisher-accurate curve rasterization across all DPIs. Blend groups, filled glyphs, image/gradient brushes, stroke dashes and color management still require separate evidence.
