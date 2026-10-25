@@ -48,3 +48,14 @@ The independent demo now creates a real upstream `BorderColor` / `BorderWidth` s
 **Failure policy:** unsupported path/brush/groups/stroked clips are *not drawn as un-clipped approximations*. They increment `mp_skipped_draws`; the R2 browser E2E requires zero skipped draws for its test scene. This is not yet generalized SVG path/gradient/text/glyph compositing or production clipping.
 
 Tests: native Rust checks stroke and clip ops exist; Node confirms real `Draw::Stroke` color/width, clip push/draw/pop ordering, clipped viewport width, and zero skipped draws; Chromium and Firefox inspect red border pixels, green pixels inside a portal and absent pixels outside the clip, and previous button/resize behaviors.
+
+## R2 fix — upstream scrollbar joins
+
+Actual CI diagnostics showed the only unsupported operation was the real Portal
+scrollbar's `Stroke::new(edge_width)` using `Join::Round` (not a missing
+`PushClip` or `PopClip`). The R2 scene ABI now exports the join mode
+(0=Miter,1=Round,2=Bevel) and miter limit. Canvas2D maps them to native
+`lineJoin` and `miterLimit`; the demo still rejects dashed strokes
+and non-rectangular geometry. Rust/Node/Chromium/Firefox tests assert the
+round-join scrollbar outline survives alongside the red miter border,
+and that unsupported operation count remains zero.

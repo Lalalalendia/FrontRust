@@ -14,7 +14,8 @@ const required=[
   'mp_rect_radius_tl','mp_rect_radius_tr','mp_rect_radius_br','mp_rect_radius_bl',
   'mp_rect_matrix_a','mp_rect_matrix_b','mp_rect_matrix_c',
   'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f',
-  'mp_op_count','mp_op_kind','mp_op_shape','mp_op_stroke_width'
+  'mp_op_count','mp_op_kind','mp_op_shape','mp_op_stroke_width',
+  'mp_op_stroke_join','mp_op_miter_limit'
 ];
 
 function sceneRects(){
@@ -38,7 +39,9 @@ function sceneOps(){
   return Array.from({length:count},(_,i)=>({
     kind:engine.mp_op_kind(i),
     shape:engine.mp_op_shape(i),
-    strokeWidth:engine.mp_op_stroke_width(i)
+    strokeWidth:engine.mp_op_stroke_width(i),
+    strokeJoin:engine.mp_op_stroke_join(i),
+    miterLimit:engine.mp_op_miter_limit(i)
   }));
 }
 function snapshot(){
@@ -89,7 +92,14 @@ function paint(){
     shapePath(r);
     if(op.kind===2){
       if(!Number.isFinite(op.strokeWidth)||op.strokeWidth<=0)throw Error('Invalid stroke width');
-      ctx.strokeStyle=color;ctx.lineWidth=op.strokeWidth;ctx.lineJoin='miter';ctx.lineCap='butt';
+      const joins=['miter','round','bevel'];
+      if(!Number.isInteger(op.strokeJoin)||!joins[op.strokeJoin])
+        throw Error('Unsupported Masonry stroke join: '+op.strokeJoin);
+      if(!Number.isFinite(op.miterLimit)||op.miterLimit<=0)
+        throw Error('Invalid Masonry stroke miter limit');
+      ctx.strokeStyle=color;ctx.lineWidth=op.strokeWidth;
+      ctx.lineJoin=joins[op.strokeJoin];ctx.miterLimit=op.miterLimit;
+      // ABI carries closed shapes only: caps are irrelevant.
       ctx.stroke();
     }else{
       ctx.fillStyle=color;ctx.fill('nonzero');

@@ -14,7 +14,8 @@ const symbols=[
   'mp_rect_radius_tl','mp_rect_radius_tr','mp_rect_radius_br','mp_rect_radius_bl',
   'mp_rect_matrix_a','mp_rect_matrix_b','mp_rect_matrix_c',
   'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f',
-  'mp_op_count','mp_op_kind','mp_op_shape','mp_op_stroke_width'
+  'mp_op_count','mp_op_kind','mp_op_shape','mp_op_stroke_width',
+  'mp_op_stroke_join','mp_op_miter_limit'
 ];
 for(const s of symbols)assert.equal(typeof e[s],'function','missing exported '+s);
 assert.equal(e.mp_version(),1);
@@ -39,12 +40,17 @@ assert.ok([e.mp_rect_matrix_a(rounded),e.mp_rect_matrix_b(rounded),
   e.mp_rect_matrix_c(rounded),e.mp_rect_matrix_d(rounded),
   e.mp_rect_matrix_e(rounded),e.mp_rect_matrix_f(rounded)].every(Number.isFinite));
 const ops=Array.from({length:e.mp_op_count()},(_,i)=>({
- kind:e.mp_op_kind(i),shape:e.mp_op_shape(i),strokeWidth:e.mp_op_stroke_width(i)
+ kind:e.mp_op_kind(i),shape:e.mp_op_shape(i),strokeWidth:e.mp_op_stroke_width(i),
+ strokeJoin:e.mp_op_stroke_join(i),miterLimit:e.mp_op_miter_limit(i)
 }));
 assert.ok(ops.length>rects.length,'clip pop must be preserved in painter order');
 const border=ops.find(o=>o.kind===2&&o.strokeWidth>=3);
 assert.ok(border,'real Masonry border stroke missing');
 assert.equal(rects[border.shape].rgba,encode(225,60,95),'stroke paint color was lost');
+assert.equal(border.strokeJoin,0,'red Masonry border must preserve miter join');
+const scrollbarStroke=ops.find(o=>o.kind===2&&o.strokeWidth>0&&o.strokeWidth<2&&o.strokeJoin===1);
+assert.ok(scrollbarStroke,'scrollbar round-join stroke was silently dropped');
+assert.ok(scrollbarStroke.miterLimit>0&&Number.isFinite(scrollbarStroke.miterLimit));
 const clipPush=ops.findIndex(o=>o.kind===3);
 const clipPop=ops.findIndex(o=>o.kind===4);
 assert.ok(clipPush>=0&&clipPop>clipPush,'real Masonry nonisolated clip must retain push/pop order');

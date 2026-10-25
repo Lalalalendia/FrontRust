@@ -48,6 +48,9 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     // at the middle of the top edge, not merely presence of a Rust ABI value.
     const strokeOp=first.ops.find(op=>op.kind===2&&op.strokeWidth>=3);
     assert.ok(strokeOp,'real Masonry stroke not serialized');
+    assert.equal(strokeOp.strokeJoin,0,'Masonry border miter join lost');
+    assert.ok(first.ops.some(op=>op.kind===2&&op.strokeJoin===1&&op.strokeWidth<2),
+      'Masonry scrollbar round stroke join was not delivered to browser');
     const stroke=first.rects[strokeOp.shape];
     assert.ok(stroke,'stroke record missing');
     const borderPixel=await page.evaluate(({x,y})=>Array.from(

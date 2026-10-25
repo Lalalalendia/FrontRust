@@ -60,6 +60,9 @@ mod browser_host {
         kind: i32,
         shape: i32,
         stroke_width: f64,
+        // 0=Miter, 1=Round, 2=Bevel. Shape transport is closed Rect/RoundedRect.
+        stroke_join: i32,
+        miter_limit: f64,
     }
 
     fn shape_record(shape: &Geometry, transform: &masonry::kurbo::Affine, color: Color)
@@ -178,11 +181,6 @@ mod browser_host {
             let mut clip_support: Vec<bool> = Vec::new();
             let mut unsupported_group_depth = 0usize;
             for command in flattened.commands() {
-                #[cfg(test)]
-                match command {
-                    Command::Draw(id) => eprintln!("R2 debug draw: {:?}", flattened.draw_op(*id)),
-                    other => eprintln!("R2 debug scene command: {:?}", other),
-                }
                 match command {
                     Command::PushContext(_) | Command::PopContext => {}
                     Command::PushGroup(_) => {
@@ -201,7 +199,7 @@ mod browser_host {
                                 Clip::Fill { transform, shape, fill_rule }
                                     if *fill_rule == Fill::NonZero => {
                                     if let Some(record) = shape_record(shape, transform, Color::TRANSPARENT) {
-                                        self.add_op(record, 3, 0.0);
+                                        self.add_op(record, 3, 0.0, 0, 4.0);
                                         true
                                     } else { false }
                                 }
@@ -214,7 +212,7 @@ mod browser_host {
                     }
                     Command::PopClip => {
                         match clip_support.pop() {
-                            Some(true) => self.ops.push(SceneOp { kind:4, shape:-1, stroke_width:0.0 }),
+                            Some(true) => self.ops.push(SceneOp { kind:4, shape:-1, stroke_width:0.0, stroke_join:0, miter_limit:4.0 }),
                             Some(false) => {},
                             None => self.skipped_draws += 1,
                         }
@@ -224,18 +222,26 @@ mod browser_host {
                             self.skipped_draws += 1;
                             continue;
                         }
-                        let (kind, shape, transform, color, stroke_width) =
+                        let (kind, shape, transform, color, stroke_width, stroke_join, miter_limit) =
                             match flattened.draw_op(*id) {
                                 Draw::Fill { shape, transform, brush: Brush::Solid(color), fill_rule: Fill::NonZero, .. } =>
-                                    (1, shape, transform, *color, 0.0),
+                                    (1, shape, transform, *color, 0.0, 0, 4.0),
                                 Draw::Stroke { shape, transform, brush: Brush::Solid(color), stroke, .. }
                                     if stroke.width.is_finite() && stroke.width > 0.0
                                         && stroke.dash_pattern.is_empty()
-                                        // Geometry::Rect/RoundedRect are closed shapes:
-                                        // Kurbo's default Round caps do not affect the
-                                        // stroke outline of a closed border.
-                                        && stroke.join == Join::Miter =>
-                                    (2, shape, transform, *color, stroke.width),
+                                        && stroke.miter_limit.is_finite() && stroke.miter_limit > 0.0 =>
+                                {
+                                    // A scrollbar's upstream default Stroke::new() has
+                                    // Join::Round. Canvas supports Miter, Round and Bevel.
+                                    // We only serialize closed Rect/RoundedRect geometry;
+                                    // cap style does not affect such a closed stroke.
+                                    let join = match stroke.join {
+                                        Join::Miter => 0,
+                                        Join::Round => 1,
+                                        Join::Bevel => 2,
+                                    };
+                                    (2, shape, transform, *color, stroke.width, join, stroke.miter_limit)
+                                },
                                 // Every other draw is explicitly counted as unsupported.
                                 _ => {
                                     self.skipped_draws += 1;
@@ -243,7 +249,7 @@ mod browser_host {
                                 }
                             };
                         if let Some(record) = shape_record(shape, transform, color) {
-                            self.add_op(record, kind, stroke_width);
+                            self.add_op(record, kind, stroke_width, stroke_join, miter_limit);
                         } else { self.skipped_draws += 1; }
                     }
                 }
@@ -253,10 +259,12 @@ mod browser_host {
             }
         }
 
-        fn add_op(&mut self, record: SolidRect, kind: i32, stroke_width: f64) {
+        fn add_op(&mut self, record: SolidRect, kind: i32, stroke_width: f64,
+            stroke_join: i32, miter_limit: f64)
+        {
             let idx = self.rects.len() as i32;
             self.rects.push(record);
-            self.ops.push(SceneOp { kind, shape: idx, stroke_width });
+            self.ops.push(SceneOp { kind, shape: idx, stroke_width, stroke_join, miter_limit });
         }
 
         pub fn resize(&mut self, width: u32, height: u32) -> i32 {
@@ -436,6 +444,20 @@ mod browser_host {
         get_f64(|h| h.ops.get(i.max(0) as usize).map(|o| o.stroke_width).unwrap_or(f64::NAN))
     }
 
+    // SAFETY: scalar-only exported symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_op_stroke_join(i: i32) -> i32 {
+        get_i32(|h| h.ops.get(i.max(0) as usize).map(|o| o.stroke_join).unwrap_or(-1))
+    }
+
+    // SAFETY: scalar-only exported symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_op_miter_limit(i: i32) -> f64 {
+        get_f64(|h| h.ops.get(i.max(0) as usize).map(|o| o.miter_limit).unwrap_or(f64::NAN))
+    }
+
     // This is a scalar-only ABI experiment; no raw pointers or shared memory.
     // WASM / Canvas uses these values instead of prematurely rasterizing
     // rotated or rounded geometry into axis-aligned rectangles.
@@ -556,7 +578,8 @@ mod browser_host {
             assert!(h.rects.iter().all(|r| r.matrix.iter().all(|n| n.is_finite())));
             assert!(h.rects.iter().any(|r| r.rgba == Color::from_rgb8(195,145,105).to_rgba8().to_u32()));
             assert!(h.ops.iter().any(|o| o.kind == 1), "fill missing");
-            assert!(h.ops.iter().any(|o| o.kind == 2 && o.stroke_width >= 3.0), "stroke missing");
+            assert!(h.ops.iter().any(|o| o.kind == 2 && o.stroke_width >= 3.0 && o.stroke_join == 0), "miter border stroke missing");
+            assert!(h.ops.iter().any(|o| o.kind == 2 && o.stroke_join == 1), "round-join scrollbar stroke missing");
             assert!(h.ops.iter().any(|o| o.kind == 3), "clip push missing");
             assert!(h.ops.iter().any(|o| o.kind == 4), "clip pop missing");
             assert_eq!(h.skipped_draws, 0, "lossy scene operations in R2 demo");
