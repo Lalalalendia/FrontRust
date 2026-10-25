@@ -133,3 +133,10 @@ The old `#[unsafe(no_mangle)]` scalar exports are callable directly on `WebAssem
 - **Fail-closed gates:** reject out-of-range, reversed or mid-UTF-8-scalar indices, edits while composing, unfocused edits, final text above 4096 bytes, missing Masonry `TextAction`, or mismatches between expected and actual Rust text. The real scene `ButtonPress` remains isolated.
 - **IME race fence:** `compositionstart` syncs the current Rust selection; preedit remains transient, and an `insertFromComposition` `input` event after explicit `compositionend` must not write the same confirmed text twice. This is NOT yet evidence of full system-IME event ordering or selection replacement across all platforms.
 - Native Rust, Node WASM and Playwright Chromium/Firefox test mid-string insertions, selected emoji deletion, selected Japanese/Cyrillic replacement, Unicode boundary refusal and unchanged graphical gates. Arbitrary undo, multi-range selection, keyboard dead keys, OS-native Japanese IME, accessibility text offsets and Canvas glyph transport are out of scope.
+
+
+### R4e prerequisite: deterministic font-backed selection (layout only)
+
+The first R4e native/compatibility run [#40221693042](https://github.com/Lalalalendia/FrontRust/actions/runs/40221693042) failed: replacing UTF-8 `1..5` in `A🌍B日本C` produced `A🌍B日本C🐱` instead of `A🐱B日本C`. The text `RenderRoot` had `use_system_fonts: false`, `test_font: None`, so Parley had no glyph clusters to map byte ranges to actual cursors and snapped selection to the end. This is a real precondition of the upstream editor, not an invalid UTF-8 range.
+
+The bounded test/runtime now supplies an **in-house, minimal, placeholder-only layout font**, stored as hex text in `fixtures/r4e-layout-font.hex`, via `RenderRootOptions.test_font`. It exists only to make cursor shaping deterministic; all glyph outlines are identical boxes and must never be used for actual rendering or claimed as glyph fidelity. Production needs real font loading, fallback/shaping coverage for Cyrillic/CJK/emoji, and a separate browser-glyph parity gate. The R3b Canvas serializer remains unchanged.

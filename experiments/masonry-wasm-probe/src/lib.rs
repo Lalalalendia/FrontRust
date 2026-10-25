@@ -26,7 +26,7 @@ mod browser_host {
     use masonry::imaging::{Painter, record::{Command, Draw, Geometry, Scene}};
     use masonry::kurbo::{Affine, BezPath, Cap, Join, PathEl, Point, Shape as _, Stroke, Vec2};
     use masonry::layout::{AsUnit, Length};
-    use masonry::peniko::{Brush, Color, Fill};
+    use masonry::peniko::{Blob, Brush, Color, Fill};
     use masonry::properties::{Background, BorderColor, BorderWidth, ContentColor, CornerRadius, Dimensions};
     use masonry::theme::default_property_set;
     use masonry::ui_events::keyboard::{Key, Modifiers, NamedKey};
@@ -132,6 +132,25 @@ mod browser_host {
             local:[rect.x0, rect.y0, rect.width(), rect.height()],
             matrix, radii, path,
         })
+    }
+
+    // The pinned Parley TextArea needs glyph clusters to turn UTF-8 byte
+    // offsets into cursors. Without ANY font, select_byte_range silently
+    // snaps both cursors to EOF: the next paste appends instead of replacing.
+    //
+    // A tiny generated OFL-free in-house synthetic OpenType fixture is used
+    // exclusively for deterministic R4e text-layout tests. Its glyphs are
+    // identical placeholder boxes, NOT production typography.
+    fn r4e_layout_font() -> Blob<u8> {
+        let mut bytes=Vec::new();
+        for line in include_str!("../fixtures/r4e-layout-font.hex").split_ascii_whitespace() {
+            assert!(line.len()%2==0);
+            for i in (0..line.len()).step_by(2) {
+                bytes.push(u8::from_str_radix(&line[i..i+2],16)
+                    .expect("invalid synthetic R4e font hex"));
+            }
+        }
+        Blob::new(Arc::new(bytes))
     }
 
     pub struct BrowserHost {
@@ -287,7 +306,9 @@ mod browser_host {
                     size_policy: WindowSizePolicy::User,
                     size: PhysicalSize::new(320, 48),
                     scale_factor: 1.0,
-                    test_font: None,
+                    // A layout-only fixture ensures cursor clusters exist in
+                    // WASM/CI where system font discovery is unavailable.
+                    test_font: Some(r4e_layout_font()),
                 },
             );
             text_root.handle_window_event(WindowEvent::EnableAccessTree);
