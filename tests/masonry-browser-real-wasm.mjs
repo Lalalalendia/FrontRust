@@ -376,8 +376,11 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
       window.__masonryProbe.snapshot().editorCommitted==='Привет 🌍日本');
     await editor.evaluate(el=>el.setSelectionRange(7,7));
     await page.keyboard.type('X');
-    await page.waitForFunction(()=>
-      window.__masonryProbe.snapshot().editorCommitted==='Привет X🌍日本');
+    const insertedMid=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(insertedMid.editorCommitted,'Привет X🌍日本',
+      'native browser input did not commit mid-string insertion; '+JSON.stringify({
+        editorCommitted:insertedMid.editorCommitted,
+        domValue:await editor.inputValue(),errors}));
     assert.deepEqual(await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),[8,8],
       'ordinary mid-string insertion moved browser caret to end');
     await editor.evaluate(el=>el.setSelectionRange(8,10)); // full emoji surrogate pair

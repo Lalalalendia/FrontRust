@@ -1295,12 +1295,22 @@ mod browser_host {
             assert_eq!(h.editor_splice(1, 1, &"z".repeat(4097)), -2,
                 "oversized UTF-8 edit must fail closed");
             assert_eq!(h.editor_committed, "AжB日本C");
+            // Mirror Chromium's exact Cyrillic/emoji fixture, not just
+            // ASCII + CJK. A font/layout regression must fail in native Rust.
+            assert_eq!(h.editor_replace("Привет 🌍日本"), 1);
+            assert_eq!(h.editor_splice(13, 13, "X"), 1,
+                "UTF-8 insertion after Cyrillic text must preserve caret position");
+            assert_eq!(h.editor_committed, "Привет X🌍日本");
+            assert_eq!(h.editor_splice(14, 18, ""), 1);
+            assert_eq!(h.editor_committed, "Привет X日本");
+            assert_eq!(h.editor_splice(13, 14, "猫"), 1);
+            assert_eq!(h.editor_committed, "Привет 猫日本");
             assert_eq!(h.editor_preedit("に"), 1);
             assert_eq!(h.editor_splice(1, 1, "x"), -3,
                 "ordinary input cannot race active composition");
             assert_eq!(h.editor_select_range(1, 1), -3);
             assert_eq!(h.editor_cancel(), 1);
-            assert_eq!(h.editor_committed, "AжB日本C");
+            assert_eq!(h.editor_committed, "Привет 猫日本");
             assert_eq!(h.editor_focus(false), 0);
             assert_eq!(h.editor_splice(1, 1, "leak"), -1);
             assert_eq!(h.clicks.get(), 0,

@@ -440,9 +440,13 @@ try{
         }
       }
       if(!patch)patch=singleUnicodeSplice(oldValue,newValue);
-      if(engine.mp_editor_splice(patch.start,patch.end,patch.insert)!==1
-        ||engine.mp_editor_committed_text()!==newValue)
-        throw Error('Masonry UTF-8 selection splice failed');
+      const rc=engine.mp_editor_splice(patch.start,patch.end,patch.insert);
+      const actual=engine.mp_editor_committed_text();
+      if(rc!==1 || actual!==newValue)
+        throw Error('Masonry UTF-8 selection splice failed: '+
+          JSON.stringify({rc,oldValue,newValue,actual,patch,
+            beforeinput:pending,domSelection:[textEditor.selectionStart,
+              textEditor.selectionEnd]}));
     }
     beforeEditorInput=null;
     syncEditorSelection();
