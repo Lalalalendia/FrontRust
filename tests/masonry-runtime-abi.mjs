@@ -13,7 +13,8 @@ const symbols=[
   'mp_rect_local_x','mp_rect_local_y','mp_rect_local_width','mp_rect_local_height',
   'mp_rect_radius_tl','mp_rect_radius_tr','mp_rect_radius_br','mp_rect_radius_bl',
   'mp_rect_matrix_a','mp_rect_matrix_b','mp_rect_matrix_c',
-  'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f'
+  'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f',
+  'mp_op_count','mp_op_kind','mp_op_shape','mp_op_stroke_width'
 ];
 for(const s of symbols)assert.equal(typeof e[s],'function','missing exported '+s);
 assert.equal(e.mp_version(),1);
@@ -37,6 +38,23 @@ assert.ok(Number.isFinite(e.mp_rect_matrix_a(rounded)) && Number.isFinite(e.mp_r
 assert.ok([e.mp_rect_matrix_a(rounded),e.mp_rect_matrix_b(rounded),
   e.mp_rect_matrix_c(rounded),e.mp_rect_matrix_d(rounded),
   e.mp_rect_matrix_e(rounded),e.mp_rect_matrix_f(rounded)].every(Number.isFinite));
+const ops=Array.from({length:e.mp_op_count()},(_,i)=>({
+ kind:e.mp_op_kind(i),shape:e.mp_op_shape(i),strokeWidth:e.mp_op_stroke_width(i)
+}));
+assert.ok(ops.length>rects.length,'clip pop must be preserved in painter order');
+const border=ops.find(o=>o.kind===2&&o.strokeWidth>=3);
+assert.ok(border,'real Masonry border stroke missing');
+assert.equal(rects[border.shape].rgba,encode(225,60,95),'stroke paint color was lost');
+const clipPush=ops.findIndex(o=>o.kind===3);
+const clipPop=ops.findIndex(o=>o.kind===4);
+assert.ok(clipPush>=0&&clipPop>clipPush,'real Masonry nonisolated clip must retain push/pop order');
+const clip=rects[ops[clipPush].shape];
+const greenIndex=rects.findIndex(r=>r.rgba===encode(40,170,100));
+assert.ok(greenIndex>=0,'clipped Masonry green background missing');
+const greenOpIndex=ops.findIndex(o=>o.kind===1&&o.shape===greenIndex);
+assert.ok(greenOpIndex>clipPush&&greenOpIndex<clipPop,'clipped draw must remain inside clip scope');
+assert.ok(clip.width<rects[greenIndex].width,'viewport must cut green background horizontally');
+assert.equal(e.mp_skipped_draws(),0,'unexpected lossy paint ops');
 const target=rects.find(r=>r.rgba===brown);
 assert.ok(target,'button child surface from Masonry missing');
 assert.ok(target.width>0&&target.height>0,'button surface has no layout');
@@ -50,4 +68,4 @@ assert.deepEqual([e.mp_width(),e.mp_height()],[400,300]);
 rects=getRects();
 assert.ok(rects.some(r=>r.rgba===blue));
 assert.ok(rects.some(r=>r.rgba===brown));
-console.log('PASS real Masonry WASM RenderRoot layout, scene fill records, ButtonPress and resize');
+console.log('PASS real Masonry WASM stroke + clip painter order, colors, pointer ButtonPress and resize');

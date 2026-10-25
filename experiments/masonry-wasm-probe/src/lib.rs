@@ -20,19 +20,20 @@ pub fn masonry_native_host_type_size() -> usize {
 mod browser_host {
     use masonry::app::{RenderRoot, RenderRootOptions, RenderRootSignal, WindowSizePolicy};
     use masonry::core::{NewWidget, PropertySet, Widget, WindowEvent};
+    use masonry::imaging::record::Clip;
     use masonry::dpi::{PhysicalPosition, PhysicalSize};
     use masonry::imaging::record::{Command, Draw, Geometry, Scene};
-    use masonry::kurbo::Point;
+    use masonry::kurbo::{Cap, Join, Point};
     use masonry::layout::{AsUnit, Length};
-    use masonry::peniko::{Brush, Color};
-    use masonry::properties::{Background, CornerRadius};
+    use masonry::peniko::{Brush, Color, Fill};
+    use masonry::properties::{Background, BorderColor, BorderWidth, CornerRadius, Dimensions};
     use masonry::theme::default_property_set;
     use masonry::ui_events::keyboard::Modifiers;
     use masonry::ui_events::pointer::{
         PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
         PointerType,
     };
-    use masonry::widgets::{Button, ButtonPress, Flex, SizedBox};
+    use masonry::widgets::{Button, ButtonPress, Flex, Portal, SizedBox};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::Arc;
@@ -53,9 +54,52 @@ mod browser_host {
         pub radii: [f64; 4],
     }
 
+    #[derive(Debug, Clone, Copy)]
+    struct SceneOp {
+        // 1=Fill, 2=Stroke, 3=PushClip, 4=PopClip.
+        kind: i32,
+        shape: i32,
+        stroke_width: f64,
+    }
+
+    fn shape_record(shape: &Geometry, transform: &masonry::kurbo::Affine, color: Color)
+        -> Option<SolidRect>
+    {
+        let (rect, radii) = match shape {
+            Geometry::Rect(rect) => (*rect, [0.0;4]),
+            Geometry::RoundedRect(round) => {
+                let r = round.radii();
+                (round.rect(), [r.top_left, r.top_right, r.bottom_right, r.bottom_left])
+            }
+            Geometry::Path(_) => return None,
+        };
+        let matrix = transform.as_coeffs();
+        let points = [
+            *transform * Point::new(rect.x0, rect.y0),
+            *transform * Point::new(rect.x1, rect.y0),
+            *transform * Point::new(rect.x1, rect.y1),
+            *transform * Point::new(rect.x0, rect.y1),
+        ];
+        let x = points.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+        let y = points.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+        let x1 = points.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+        let y1 = points.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+        if ![x, y, x1, y1, rect.x0, rect.y0, rect.width(), rect.height()]
+            .iter().chain(matrix.iter()).chain(radii.iter()).all(|n| n.is_finite()) {
+            return None;
+        }
+        Some(SolidRect {
+            x, y, width:x1-x, height:y1-y,
+            rgba:color.to_rgba8().to_u32(),
+            local:[rect.x0, rect.y0, rect.width(), rect.height()],
+            matrix, radii,
+        })
+    }
+
     pub struct BrowserHost {
         root: RenderRoot,
         rects: Vec<SolidRect>,
+        ops: Vec<SceneOp>,
         scene_layers: i32,
         accessibility_nodes: i32,
         skipped_draws: i32,
@@ -64,21 +108,29 @@ mod browser_host {
 
     impl BrowserHost {
         pub fn new(width: u32, height: u32) -> Self {
-            let tile = |color: Color| {
+            let tile = |color: Color, bordered: bool| {
                 let mut props = PropertySet::one(Background::Color(color));
-                // Force a REAL rounded geometry in Masonry, not a browser-only
-                // CSS/Canvas decoration: the transport must preserve its radii.
                 props.insert(CornerRadius::all(18.px()));
+                if bordered {
+                    // Actual upstream Masonry pre_paint emits Draw::Stroke.
+                    props.insert(BorderColor::new(Color::from_rgb8(225, 60, 95)));
+                    props.insert(BorderWidth::all(4.px()));
+                }
                 NewWidget::new(
                     SizedBox::empty().size(Length::const_px(120.0), Length::const_px(50.0)),
-                )
-                .with_props(props)
+                ).with_props(props)
             };
             // Both colored child surfaces are actual Masonry widgets.
             // The second is inside an actual Button and sends ButtonPress actions.
             let root_widget = Flex::column()
-                .with_fixed(tile(Color::from_rgb8(70, 120, 210)))
-                .with_fixed(NewWidget::new(Button::new(tile(Color::from_rgb8(195, 145, 105)))))
+                .with_fixed(tile(Color::from_rgb8(70, 120, 210), true))
+                .with_fixed(NewWidget::new(Button::new(tile(Color::from_rgb8(195, 145, 105), false))))
+                // A real Portal (80px viewport) clips its 120px-wide green child.
+                // This exercises PushClip / Draw / PopClip from Masonry's paint pass.
+                .with_fixed(
+                    NewWidget::new(Portal::new(tile(Color::from_rgb8(40, 170, 100), false)))
+                        .with_props(PropertySet::one(Dimensions::fixed(80.px(), 50.px())))
+                )
                 .prepare();
             let clicks = Rc::new(Cell::new(0_i32));
             let action_clicks = Rc::clone(&clicks);
@@ -102,7 +154,7 @@ mod browser_host {
             );
             root.handle_window_event(WindowEvent::EnableAccessTree);
             let mut host = Self {
-                root, rects: Vec::new(), scene_layers: 0,
+                root, rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
                 accessibility_nodes: 0, skipped_draws: 0, clicks,
             };
             host.redraw();
@@ -116,62 +168,89 @@ mod browser_host {
                 self.accessibility_nodes = tree.nodes.len() as i32;
             }
 
-            // Replays REAL retained Masonry scene layers into an Imaging scene.
-            // Explicitly bounded Canvas2D serializer: solid axis-aligned Rect and
-            // RoundedRect backgrounds only. Strokes, text, clips, gradients and
-            // unsupported draw kinds must be implemented before production use.
+            // Exact painter order matters: a canvas drawing or clip can no longer
+            // be reconstructed from a list of Rect fills alone.
             let mut flattened = Scene::new();
             plan.replay_into(&mut flattened);
             self.rects.clear();
+            self.ops.clear();
             self.skipped_draws = 0;
+            let mut clip_support: Vec<bool> = Vec::new();
+            let mut unsupported_group_depth = 0usize;
             for command in flattened.commands() {
-                let Command::Draw(id) = command else { continue };
-                let Draw::Fill { brush: Brush::Solid(color), shape, transform, .. } =
-                    flattened.draw_op(*id) else {
+                match command {
+                    Command::PushContext(_) | Command::PopContext => {}
+                    Command::PushGroup(_) => {
+                        // No group compositing/mask support yet: fail CLOSED.
+                        unsupported_group_depth += 1;
                         self.skipped_draws += 1;
-                        continue;
-                    };
-                let (rect, radii) = match shape {
-                    Geometry::Rect(rect) => (*rect, [0.0; 4]),
-                    Geometry::RoundedRect(round) => {
-                        let radii = round.radii();
-                        (round.rect(), [
-                            radii.top_left, radii.top_right,
-                            radii.bottom_right, radii.bottom_left,
-                        ])
-                    },
-                    Geometry::Path(_) => {
-                        self.skipped_draws += 1;
-                        continue;
                     }
-                };
-                let matrix = transform.as_coeffs();
-                // Existing x/y/width/height getters retain the WINDOW-SPACE
-                // bounding-box contract consumed by the original E2E test.
-                // Extra getters expose exact untransformed geometry to Canvas.
-                let corners = [
-                    *transform * Point::new(rect.x0, rect.y0),
-                    *transform * Point::new(rect.x1, rect.y0),
-                    *transform * Point::new(rect.x1, rect.y1),
-                    *transform * Point::new(rect.x0, rect.y1),
-                ];
-                let x = corners.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
-                let y = corners.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
-                let far_x = corners.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
-                let far_y = corners.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
-                if ![x, y, far_x, far_y, rect.x0, rect.y0, rect.width(), rect.height()]
-                    .iter().chain(matrix.iter()).chain(radii.iter()).all(|n| n.is_finite())
-                {
-                    self.skipped_draws += 1;
-                    continue;
+                    Command::PopGroup => {
+                        if unsupported_group_depth == 0 { self.skipped_draws += 1; }
+                        else { unsupported_group_depth -= 1; }
+                    }
+                    Command::PushClip(id) => {
+                        let supported = if unsupported_group_depth == 0
+                            && clip_support.iter().all(|ok| *ok) {
+                            match flattened.clip(*id) {
+                                Clip::Fill { transform, shape, fill_rule }
+                                    if *fill_rule == Fill::NonZero => {
+                                    if let Some(record) = shape_record(shape, transform, Color::TRANSPARENT) {
+                                        self.add_op(record, 3, 0.0);
+                                        true
+                                    } else { false }
+                                }
+                                // Stroked clips and even-odd paths need proper path support.
+                                _ => false,
+                            }
+                        } else { false };
+                        if !supported { self.skipped_draws += 1; }
+                        clip_support.push(supported);
+                    }
+                    Command::PopClip => {
+                        match clip_support.pop() {
+                            Some(true) => self.ops.push(SceneOp { kind:4, shape:-1, stroke_width:0.0 }),
+                            Some(false) => {},
+                            None => self.skipped_draws += 1,
+                        }
+                    }
+                    Command::Draw(id) => {
+                        if unsupported_group_depth > 0 || clip_support.iter().any(|ok| !ok) {
+                            self.skipped_draws += 1;
+                            continue;
+                        }
+                        let (kind, shape, transform, color, stroke_width) =
+                            match flattened.draw_op(*id) {
+                                Draw::Fill { shape, transform, brush: Brush::Solid(color), fill_rule: Fill::NonZero, .. } =>
+                                    (1, shape, transform, *color, 0.0),
+                                Draw::Stroke { shape, transform, brush: Brush::Solid(color), stroke, .. }
+                                    if stroke.width.is_finite() && stroke.width > 0.0
+                                        && stroke.dash_pattern.is_empty()
+                                        && stroke.join == Join::Miter
+                                        && stroke.start_cap == Cap::Butt
+                                        && stroke.end_cap == Cap::Butt =>
+                                    (2, shape, transform, *color, stroke.width),
+                                // Every other draw is explicitly counted as unsupported.
+                                _ => {
+                                    self.skipped_draws += 1;
+                                    continue;
+                                }
+                            };
+                        if let Some(record) = shape_record(shape, transform, color) {
+                            self.add_op(record, kind, stroke_width);
+                        } else { self.skipped_draws += 1; }
+                    }
                 }
-                self.rects.push(SolidRect {
-                    x, y, width: far_x - x, height: far_y - y,
-                    local: [rect.x0, rect.y0, rect.width(), rect.height()],
-                    matrix, radii,
-                    rgba: (*color).to_rgba8().to_u32(),
-                });
             }
+            if !clip_support.is_empty() || unsupported_group_depth != 0 {
+                self.skipped_draws += 1;
+            }
+        }
+
+        fn add_op(&mut self, record: SolidRect, kind: i32, stroke_width: f64) {
+            let idx = self.rects.len() as i32;
+            self.rects.push(record);
+            self.ops.push(SceneOp { kind, shape: idx, stroke_width });
         }
 
         pub fn resize(&mut self, width: u32, height: u32) -> i32 {
@@ -323,6 +402,34 @@ mod browser_host {
             .map(|r| r.rgba).unwrap_or(0))
     }
 
+    // Ordered scene-command ABI. Shape indices refer to mp_rect_* scalar
+    // geometry records; PopClip deliberately has no shape.
+    // SAFETY: every symbol is scalar-only and passes no borrowed pointers.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_op_count() -> i32 { get_i32(|h| h.ops.len() as i32) }
+
+    // SAFETY: scalar ABI.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_op_kind(i: i32) -> i32 {
+        get_i32(|h| h.ops.get(i.max(0) as usize).map(|o| o.kind).unwrap_or(-1))
+    }
+
+    // SAFETY: scalar ABI.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_op_shape(i: i32) -> i32 {
+        get_i32(|h| h.ops.get(i.max(0) as usize).map(|o| o.shape).unwrap_or(-1))
+    }
+
+    // SAFETY: scalar ABI.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_op_stroke_width(i: i32) -> f64 {
+        get_f64(|h| h.ops.get(i.max(0) as usize).map(|o| o.stroke_width).unwrap_or(f64::NAN))
+    }
+
     // This is a scalar-only ABI experiment; no raw pointers or shared memory.
     // WASM / Canvas uses these values instead of prematurely rasterizing
     // rotated or rounded geometry into axis-aligned rectangles.
@@ -442,6 +549,11 @@ mod browser_host {
             assert!(h.rects.iter().any(|r| r.rgba == Color::from_rgb8(70,120,210).to_rgba8().to_u32() && r.radii[0] >= 10.0));
             assert!(h.rects.iter().all(|r| r.matrix.iter().all(|n| n.is_finite())));
             assert!(h.rects.iter().any(|r| r.rgba == Color::from_rgb8(195,145,105).to_rgba8().to_u32()));
+            assert!(h.ops.iter().any(|o| o.kind == 1), "fill missing");
+            assert!(h.ops.iter().any(|o| o.kind == 2 && o.stroke_width >= 3.0), "stroke missing");
+            assert!(h.ops.iter().any(|o| o.kind == 3), "clip push missing");
+            assert!(h.ops.iter().any(|o| o.kind == 4), "clip pop missing");
+            assert_eq!(h.skipped_draws, 0, "lossy scene operations in R2 demo");
             assert!(h.resize(400, 300) >= 2);
             assert_eq!(h.size(), (400,300));
         }

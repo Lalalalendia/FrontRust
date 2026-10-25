@@ -13,7 +13,8 @@ const required=[
   'mp_rect_local_x','mp_rect_local_y','mp_rect_local_width','mp_rect_local_height',
   'mp_rect_radius_tl','mp_rect_radius_tr','mp_rect_radius_br','mp_rect_radius_bl',
   'mp_rect_matrix_a','mp_rect_matrix_b','mp_rect_matrix_c',
-  'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f'
+  'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f',
+  'mp_op_count','mp_op_kind','mp_op_shape','mp_op_stroke_width'
 ];
 
 function sceneRects(){
@@ -31,37 +32,76 @@ function sceneRects(){
       engine.mp_rect_matrix_d(i),engine.mp_rect_matrix_e(i),engine.mp_rect_matrix_f(i)]
   }));
 }
+function sceneOps(){
+  const count=engine.mp_op_count();
+  if(count<0||count>256)throw Error('Invalid WASM scene operation count: '+count);
+  return Array.from({length:count},(_,i)=>({
+    kind:engine.mp_op_kind(i),
+    shape:engine.mp_op_shape(i),
+    strokeWidth:engine.mp_op_stroke_width(i)
+  }));
+}
 function snapshot(){
   return {engine:'Rust/Masonry/RenderRoot',
     width:engine.mp_width(),height:engine.mp_height(),
     layers:engine.mp_layer_count(),
     accessNodes:engine.mp_access_nodes(),
     skippedDraws:engine.mp_skipped_draws(),
-    clicks:engine.mp_click_count(),rects:sceneRects()};
+    clicks:engine.mp_click_count(),rects:sceneRects(),ops:sceneOps()};
 }
 function paint(){
   scheduled=false;
   const scene=snapshot();
   ctx.fillStyle='#f8fbff';
   ctx.fillRect(0,0,canvas.width,canvas.height);
-  for(const r of scene.rects){
-    if(![r.x,r.y,r.width,r.height].every(Number.isFinite))throw Error('Nonfinite Masonry draw');
-    const red=r.rgba&255,green=(r.rgba>>>8)&255,blue=(r.rgba>>>16)&255,alpha=(r.rgba>>>24)&255;
-    if(![...r.local,...r.radii,...r.matrix].every(Number.isFinite))throw Error('Nonfinite Masonry local geometry');
-    ctx.save();
-    // Preserve the FULL Kurbo affine matrix, including rotation and skew.
-    ctx.setTransform(...r.matrix);
-    ctx.fillStyle='rgba('+red+','+green+','+blue+','+(alpha/255)+')';
+  // The scene is an ORDERED command stream. A clip is an actual Canvas
+  // save/clip/restore scope, not a decorative bounding rectangle.
+  const shapePath=r=>{
     ctx.beginPath();
     if(r.radii.some(v=>v>0))ctx.roundRect(...r.local,r.radii);
     else ctx.rect(...r.local);
-    ctx.fill();
+  };
+  let clipDepth=0;
+  for(const op of scene.ops){
+    if(op.kind===4){
+      if(clipDepth===0)throw Error('Unbalanced Masonry clip pop');
+      ctx.restore();clipDepth--;continue;
+    }
+    const r=scene.rects[op.shape];
+    if(!r)throw Error('Invalid Masonry operation geometry index');
+    if(![...r.local,...r.radii,...r.matrix].every(Number.isFinite))
+      throw Error('Nonfinite Masonry local geometry');
+    if(op.kind===3){
+      // Keep the clip in the global scene coordinates of the Rust transform.
+      ctx.save();
+      ctx.setTransform(...r.matrix);
+      shapePath(r);
+      ctx.clip('nonzero');
+      ctx.setTransform(1,0,0,1,0,0);
+      clipDepth++;
+      continue;
+    }
+    if(op.kind!==1&&op.kind!==2)throw Error('Unsupported Masonry paint operation: '+op.kind);
+    ctx.save();
+    ctx.setTransform(...r.matrix);
+    const red=r.rgba&255,green=(r.rgba>>>8)&255,blue=(r.rgba>>>16)&255,alpha=(r.rgba>>>24)&255;
+    const color='rgba('+red+','+green+','+blue+','+(alpha/255)+')';
+    shapePath(r);
+    if(op.kind===2){
+      if(!Number.isFinite(op.strokeWidth)||op.strokeWidth<=0)throw Error('Invalid stroke width');
+      ctx.strokeStyle=color;ctx.lineWidth=op.strokeWidth;ctx.lineJoin='miter';ctx.lineCap='butt';
+      ctx.stroke();
+    }else{
+      ctx.fillStyle=color;ctx.fill('nonzero');
+    }
     ctx.restore();
   }
+  if(clipDepth!==0)throw Error('Unbalanced Masonry clip stack');
   el('layers').textContent=String(scene.layers);
-  el('rectangles').textContent=String(scene.rects.length);
+  el('rectangles').textContent=String(scene.rects.length)+' / '+scene.ops.length+' ops';
   el('access').textContent=String(scene.accessNodes);
   el('clicks').textContent=String(scene.clicks);
+  if(scene.skippedDraws!==0)throw Error('Partial Masonry scene: '+scene.skippedDraws+' unsupported operations');
   lastSnapshot=scene;
 }
 function requestPaint(){if(scheduled)return;scheduled=true;requestAnimationFrame(paint);}
