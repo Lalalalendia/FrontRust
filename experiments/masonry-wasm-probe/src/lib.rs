@@ -1,6 +1,6 @@
 //! Browser-host experiment using the REAL upstream Masonry RenderRoot.
 //! No Akula source and no masonry_winit; no claim of complete renderer support.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub fn masonry_core_identity_size() -> usize {
     core::mem::size_of::<masonry_core::core::WidgetId>()
@@ -201,9 +201,13 @@ mod browser_host {
         HOST.with(|host| host.borrow().as_ref().map(f).unwrap_or(f64::NAN))
     }
 
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_version() -> i32 { 1 }
 
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_init(width: u32, height: u32) -> i32 {
         HOST.with(|host| {
@@ -214,47 +218,75 @@ mod browser_host {
         })
     }
 
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_resize(width: u32, height: u32) -> i32 {
         HOST.with(|host| host.borrow_mut().as_mut().map(|h| h.resize(width, height)).unwrap_or(-1))
     }
 
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_pointer(down: i32, x: f64, y: f64) -> i32 {
         HOST.with(|host| host.borrow_mut().as_mut().map(|h| h.pointer(down != 0, x, y)).unwrap_or(-1))
     }
 
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_rect_count() -> i32 { get_i32(|h| h.rects.len() as i32) }
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_layer_count() -> i32 { get_i32(|h| h.scene_layers) }
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_access_nodes() -> i32 { get_i32(|h| h.accessibility_nodes) }
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_skipped_draws() -> i32 { get_i32(|h| h.skipped_draws) }
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_click_count() -> i32 { get_i32(|h| h.clicks.get()) }
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_width() -> i32 { get_i32(|h| h.size().0) }
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_height() -> i32 { get_i32(|h| h.size().1) }
 
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_rect_x(i: i32) -> f64 {
         get_f64(|h| h.rects.get(i.max(0) as usize).map(|r| r.x).unwrap_or(f64::NAN))
     }
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_rect_y(i: i32) -> f64 {
         get_f64(|h| h.rects.get(i.max(0) as usize).map(|r| r.y).unwrap_or(f64::NAN))
     }
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_rect_width(i: i32) -> f64 {
         get_f64(|h| h.rects.get(i.max(0) as usize).map(|r| r.width).unwrap_or(f64::NAN))
     }
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_rect_height(i: i32) -> f64 {
         get_f64(|h| h.rects.get(i.max(0) as usize).map(|r| r.height).unwrap_or(f64::NAN))
     }
+    // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
+    #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_rect_rgba(i: i32) -> u32 {
         HOST.with(|host| host.borrow().as_ref()
