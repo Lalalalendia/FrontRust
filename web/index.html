@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#121c30">
+  <!--SSR_HEAD-->
+  <!--SSR_SCHEMA-->
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="header">
+    <div class="mark" aria-hidden="true">R</div>
+    <a href="/" class="brand">Rust UI <span>Platform</span></a>
+    <div class="header-right"><span class="tag">ARCHITECTURE LAB / P0</span><span id="engine-status" role="status">Инициализация Rust/WASM…</span></div>
+  </header>
+  <main id="app">
+    <section class="intro" aria-labelledby="page-title">
+      <div class="eyebrow">УНИВЕРСАЛЬНАЯ ПЛАТФОРМА ИНТЕРФЕЙСОВ</div>
+      <h1 id="page-title">DOM и Canvas.<br><em>Одно Rust-состояние.</em></h1>
+      <p>Сервер формирует семантический HTML для индексации. Браузерные элементы и графический холст отправляют команды одному Rust-ядру в WebAssembly.</p>
+      <div class="intro-legend"><span><i class="dot coral"></i> HTML / SSR</span><span><i class="dot blue"></i> Canvas / WASM</span><span><i class="dot gray"></i> Rust Core</span></div>
+    </section>
+
+    <section class="workspace" aria-label="Интерактивный редактор на двух поверхностях">
+      <div class="workspace-header">
+        <div><span class="step">01 / SHARED WORKSPACE</span><h2>Гибридный редактор</h2></div>
+        <div class="actions"><button id="undo" type="button">↶ Отменить</button><button id="reset" type="button" class="quiet">Сбросить</button></div>
+      </div>
+      <div class="workspace-grid">
+        <section class="canvas-panel" aria-labelledby="canvas-title">
+          <div class="panel-bar"><span id="canvas-title">Canvas-поверхность</span><span class="panel-badge">900 × 500</span></div>
+          <canvas id="scene" width="900" height="500" tabindex="0" role="img" aria-label="Интерактивный холст. Выберите прямоугольник мышью и перемещайте его, или используйте стрелки после выбора."></canvas>
+          <div class="canvas-footer"><span>Выделение · Перемещение · Клавиши ← ↑ → ↓</span><span id="scene-revision">Сцена 0</span></div>
+        </section>
+        <aside class="inspector" aria-labelledby="inspector-title">
+          <div class="panel-bar"><span id="inspector-title">HTML-инспектор</span><span class="panel-badge">DOM</span></div>
+          <div class="inspector-content">
+            <div class="object-title"><div class="object-icon" aria-hidden="true">▢</div><div><strong>Прямоугольник #1</strong><span id="selection-label">Не выделен</span></div></div>
+            <div class="separator"></div>
+            <h3>Геометрия</h3>
+            <div class="form-grid">
+              <label for="rect-x">Позиция X<input id="rect-x" type="number" min="0" max="900" step="1" inputmode="numeric"></label>
+              <label for="rect-y">Позиция Y<input id="rect-y" type="number" min="0" max="500" step="1" inputmode="numeric"></label>
+              <label for="rect-width">Ширина<input id="rect-width" type="number" min="30" max="900" step="1" inputmode="numeric"></label>
+              <label for="rect-height">Высота<input id="rect-height" type="number" min="30" max="500" step="1" inputmode="numeric"></label>
+            </div>
+            <p class="hint">Изменения в HTML сразу применяются к Canvas. Перетаскивание на Canvas обновляет эти же поля.</p>
+            <h3>Доступность</h3>
+            <ul id="semantic-list" class="semantic-list" role="list" aria-label="Семантическое представление объектов холста"><li>Один прямоугольник</li></ul>
+            <div class="revision"><span>Ревизия документа</span><strong id="doc-revision">0</strong></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="features" aria-label="Архитектурные принципы">
+      <article><div class="feature-num">A —</div><h2>SSR и SEO</h2><p>Значимый контент и метаданные приходят с сервера. Canvas не подменяет индексируемую разметку.</p></article>
+      <article><div class="feature-num">B —</div><h2>Модель без рендерера</h2><p>Команды, координаты, undo и ревизии реализуются в Rust без зависимостей от UI-framework.</p></article>
+      <article><div class="feature-num">C —</div><h2>Независимые представления</h2><p>Canvas рисует пиксели, HTML обеспечивает формы и доступность. Оба используют одинаковую модель.</p></article>
+    </section>
+    <footer>Исследовательский прототип · Не содержит Masonry Web Adapter · Только локальная демонстрация</footer>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

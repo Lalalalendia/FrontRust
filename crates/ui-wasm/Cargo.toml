@@ -1,0 +1,11 @@
+[package]
+name = "rui-wasm"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rui-core = { path = "../ui-core" }

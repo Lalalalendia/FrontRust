@@ -1,0 +1,4 @@
+/target/
+/dist/*.wasm
+*.log
+__pycache__/

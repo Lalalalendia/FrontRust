@@ -1,0 +1,9 @@
+Source,Status,Evidence,Action,Constraint
+Akula Masonry and vello,code-verified,github.com/Lalalalendia/Akula/blob/main/aquilum-app/native/Cargo.toml,probe WASM separately,AGPL-3.0-only product implementation
+Akula output and damage,code-verified,github.com/Lalalalendia/Akula/blob/main/aquilum-app/native/src/output/mod.rs,reimplement portable adapter contract,Do not copy source
+Chaptera invalidation,code-verified,github.com/HeisLuka/rar/blob/main/crates/chaptera-layout-invalidation/src/lib.rs,extract generic concepts after independence tests,Chaptera layout projection dependency
+Pretext,Notion research,app.notion.com/p/3e532a84beec81d0b983f95b16a484b8,prepared text benchmark,Canvas metrics noncanonical
+ReScript Rewatch,Notion research,app.notion.com/p/3e532a84beec812ca447ecf7159b2900,incremental artifact graph,Do not port compiler
+NEwBOO SEO,Notion code audit,app.notion.com/p/3de32a84beec8125babafcf8a9456c3d,metadata and cache invalidation contracts,Current code and regression needed
+Rar web accessibility,Notion merged receipt,app.notion.com/p/3e532a84beec81939758d4093cbef361,semantic mirror and focus rules,Screen reader and IME pending
+bokarust Axum,code-verified,github.com/calex794/bokarust/blob/main/Cargo.toml,SSR candidate,Do not couple shared platform to product

@@ -1,0 +1,8 @@
+[package]
+name = "rui-server"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rui-core = { path = "../ui-core" }

@@ -1,0 +1,64 @@
+name: FrontRust vertical-slice gates
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rust-wasm:
+    name: Native unit tests + real WASM ABI + SSR smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Native Rust tests
+        run: cargo test --workspace
+      - name: Compile real browser WASM
+        run: cargo build --release -p rui-wasm --target wasm32-unknown-unknown
+      - name: Prove WASM exports and mutation semantics without mocks
+        run: node tests/wasm-abi.test.mjs
+      - name: Start SSR reference server and smoke HTML plus WASM MIME
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/wasm32-unknown-unknown/release/rui_wasm.wasm dist/ui_wasm.wasm
+          cargo run --quiet -p rui-server &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/healthz > /dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          curl -fsS http://127.0.0.1:8787/ > /tmp/frontrust.html
+          grep -q 'noindex,nofollow' /tmp/frontrust.html
+          grep -q 'application/ld+json' /tmp/frontrust.html
+          grep -q 'rel="canonical"' /tmp/frontrust.html
+          curl -fsS -D /tmp/frontrust.headers -o /tmp/frontrust.wasm http://127.0.0.1:8787/assets/ui_wasm.wasm
+          grep -qi 'Content-Type: application/wasm' /tmp/frontrust.headers
+          cmp /tmp/frontrust.wasm dist/ui_wasm.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontrust-wasm
+          path: target/wasm32-unknown-unknown/release/rui_wasm.wasm
+  js:
+    name: Browser adapter syntax + mock contract (not WASM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check web/app.js && node --check web/mock-engine.js
+      - run: node tests/mock-abi.test.mjs
