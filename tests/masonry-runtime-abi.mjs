@@ -18,7 +18,9 @@ const symbols=[
   'mp_op_stroke_join','mp_op_miter_limit','mp_op_stroke_cap',
   'mp_rect_path_count','mp_rect_path_kind','mp_rect_path_arg',
   'mp_semantic_button_id','mp_focus_button','mp_focused_button',
-  'mp_keyboard_button','mp_keyboard_event_count'
+  'mp_keyboard_button','mp_keyboard_event_count',
+  'mp_access_button_id','mp_access_button_disabled','mp_access_focus_id',
+  'mp_set_button_disabled','mp_set_button_present'
 ];
 for(const s of symbols)assert.equal(typeof e[s],'function','missing exported '+s);
 assert.equal(e.mp_version(),1);
@@ -159,4 +161,27 @@ assert.deepEqual([e.mp_width(),e.mp_height()],[400,300]);
 rects=getRects();
 assert.ok(rects.some(r=>r.rgba===blue));
 assert.ok(rects.some(r=>r.rgba===brown));
-console.log('PASS R4a real Masonry keyboard Enter/Space + focus fence and R3b geometry/resize');
+// R4c: JS BigInt must preserve actual Rust WidgetId/AccessKit NodeId across
+// disabled updates and change on real Rust widget replacement.
+const originalId=e.mp_access_button_id();
+assert.equal(typeof originalId,'bigint');
+assert.ok(originalId>0n);
+assert.equal(e.mp_access_button_disabled(),0);
+assert.equal(e.mp_focus_button(1),1);
+assert.equal(e.mp_access_focus_id(),originalId);
+assert.equal(e.mp_set_button_disabled(1),1);
+assert.equal(e.mp_access_button_disabled(),1);
+assert.equal(e.mp_access_button_id(),originalId);
+assert.equal(e.mp_focused_button(),0);
+assert.equal(e.mp_keyboard_button(0,1),-1);
+assert.equal(e.mp_set_button_disabled(0),0);
+assert.equal(e.mp_access_button_id(),originalId);
+assert.equal(e.mp_set_button_present(0),0);
+assert.equal(e.mp_access_button_id(),0n);
+assert.equal(e.mp_semantic_button_id(),-1);
+assert.equal(e.mp_set_button_present(1),1);
+const replacementId=e.mp_access_button_id();
+assert.ok(replacementId>0n&&replacementId!==originalId);
+assert.equal(e.mp_focus_button(1),1);
+assert.equal(e.mp_access_focus_id(),replacementId);
+console.log('PASS R4c real AccessKit node identity, disabled, removal, recreation and focus (Node WASM)');

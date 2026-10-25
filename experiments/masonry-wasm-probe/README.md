@@ -101,3 +101,12 @@ This remains a narrowly verified scene subset, not guaranteed SVG, CSS or publis
 - Route native DOM pointer clicks and `detail=0` accessibility-style activations into actual Masonry `TextEvent`/`ButtonPress`. Suppress duplicate browser default clicks from Enter/Space without suppressing standalone accessibility actions.
 - Chromium/Firefox gate: pointer, Enter/Space, Tab and composition fences still pass; a `detail=0` click increments Rust state exactly once. A programmatic `click()` is **not** a screen-reader test.
 - Still out of scope: complete AccessKit tree synchronization, accessible-name derivation from Rust, disabled/expanded state, subtree removal, real OS IME and screen-reader interaction. The DOM name remains a demo-host-provided label.
+
+
+## R4c — live AccessKit state/lifecycle projection (experimental)
+
+- Export real `WidgetId → AccessKit NodeId` as scalar `u64`, preserved as JS `bigint` / decimal DOM `data-accesskit-id`, never as an imprecise JS number.
+- A tagged Button's real `TreeUpdate` drives its `disabled` state; updates are **deltas**, so unchanged state is retained. `TreeUpdate.focus` is exported for a focus-identity gate.
+- An actual `Flex` child can be disabled, removed (replaced with an inert spacer) and recreated via `RenderRoot::edit_widget_with_tag`. A removed node loses its DOM control and a recreated Rust widget gets a new ID. The DOM focus is moved to the inspector when a focused Rust control is disabled/removed.
+- Native Rust, real Node/WASM ABI, Chromium and Firefox must test the full lifecycle plus preserved pointer/key/IME-fence and R3b paint behavior; no mock establishes acceptance.
+- **Boundary:** this is a dynamically synchronized **single tagged Button** projection, not a general AccessKit-to-DOM tree. Labels still belong to the demo HTML host; arbitrary roles, parent/child order, screen-reader AT, OS IME and WCAG remain unverified.

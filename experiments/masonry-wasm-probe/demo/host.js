@@ -4,6 +4,8 @@ const ctx=canvas.getContext('2d',{alpha:false});
 const el=id=>document.getElementById(id);
 const semanticAction=el('masonry-action');
 const inspector=el('masonry-inspector');
+const actionAnchor=document.createComment('Rust AccessKit button projection');
+semanticAction.before(actionAnchor);
 let compositionActive=false;
 let suppressNativeKeyboardClick=false;
 let engine=null;
@@ -22,7 +24,9 @@ const required=[
   'mp_op_stroke_join','mp_op_miter_limit','mp_op_stroke_cap',
   'mp_rect_path_count','mp_rect_path_kind','mp_rect_path_arg',
   'mp_semantic_button_id','mp_focus_button','mp_focused_button',
-  'mp_keyboard_button','mp_keyboard_event_count'
+  'mp_keyboard_button','mp_keyboard_event_count',
+  'mp_access_button_id','mp_access_button_disabled','mp_access_focus_id',
+  'mp_set_button_disabled','mp_set_button_present'
 ];
 
 
@@ -101,6 +105,9 @@ function snapshot(){
     skippedDraws:engine.mp_skipped_draws(),
     clicks:engine.mp_click_count(),rects:sceneRects(),ops:sceneOps(),
     semanticButtonId:engine.mp_semantic_button_id(),
+    accessButtonId:String(engine.mp_access_button_id()),
+    accessButtonDisabled:engine.mp_access_button_disabled(),
+    accessFocusId:String(engine.mp_access_focus_id()),
     focusedButton:engine.mp_focused_button(),
     keyboardEvents:engine.mp_keyboard_event_count(),
     composing:compositionActive,owner:focusOwner()};
@@ -119,10 +126,34 @@ function validateScene(scene){
     }
   }
 }
+function syncAccessProjection(scene){
+  // Only a real tagged AccessKit Button/Click node may own this DOM control.
+  // A newly created Rust widget gets a new u64 NodeId, exported losslessly.
+  const present=scene.accessButtonId!=='0'&&scene.semanticButtonId===1;
+  if(!present){
+    if(document.activeElement===semanticAction)inspector.focus({preventScroll:true});
+    semanticAction.remove();
+    semanticAction.dataset.accesskitId='';
+  }else{
+    if(!semanticAction.isConnected)actionAnchor.after(semanticAction);
+    semanticAction.dataset.accesskitId=scene.accessButtonId;
+    semanticAction.disabled=scene.accessButtonDisabled!==0;
+    if(document.activeElement===semanticAction
+      &&(semanticAction.disabled||scene.focusedButton!==1))
+      inspector.focus({preventScroll:true});
+  }
+  el('toggle-disabled').textContent=scene.accessButtonDisabled===1
+    ?'Включить кнопку Rust':'Отключить кнопку Rust';
+  el('toggle-disabled').disabled=!present;
+  el('toggle-present').textContent=present
+    ?'Удалить кнопку Rust':'Вернуть кнопку Rust';
+  updateFocusLabels();
+}
 function paint(){
   scheduled=false;
   const scene=snapshot();
   validateScene(scene);
+  syncAccessProjection(scene);
   ctx.fillStyle='#f8fbff';
   ctx.fillRect(0,0,canvas.width,canvas.height);
   // The scene is an ORDERED command stream. A clip is an actual Canvas
@@ -210,6 +241,18 @@ function resize(width,height){
   canvas.width=engine.mp_width();canvas.height=engine.mp_height();
   requestPaint();
 }
+function setButtonDisabled(disabled){
+  const result=engine.mp_set_button_disabled(disabled?1:0);
+  if(result!==Number(disabled))throw Error('Rust AccessKit disabled update refused');
+  requestPaint();
+  return result;
+}
+function setButtonPresent(present){
+  const result=engine.mp_set_button_present(present?1:0);
+  if(result!==Number(present))throw Error('Rust AccessKit node lifecycle refused');
+  requestPaint();
+  return result;
+}
 try{
   // Transitive wasm-bindgen imports require the generated JS glue; never instantiate raw bytes.
   engine=await initWasm();
@@ -265,13 +308,19 @@ try{
     engine.mp_pointer(0,p.x,p.y);
     requestPaint();
   });
+  el('toggle-disabled').addEventListener('click',()=>{
+    setButtonDisabled(engine.mp_access_button_disabled()!==1);
+  });
+  el('toggle-present').addEventListener('click',()=>{
+    setButtonPresent(String(engine.mp_access_button_id())==='0');
+  });
   el('resize').addEventListener('click',()=>resize(canvas.width===320?400:320,canvas.height===360?300:360));
   requestPaint();
   el('status').textContent='Real Rust/WASM RenderRoot';
   // Exposed only for deterministic browser harness assertions.
   updateFocusLabels();
   window.__masonryProbe={
-    snapshot,resize,validateScene,focusOwner,
+    snapshot,resize,validateScene,focusOwner,setButtonDisabled,setButtonPresent,
     get composing(){return compositionActive},
     get lastSnapshot(){return lastSnapshot}
   };

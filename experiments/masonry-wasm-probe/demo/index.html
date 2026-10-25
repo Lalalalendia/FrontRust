@@ -47,9 +47,11 @@
         <input id="masonry-inspector" type="text" autocomplete="off" placeholder="Текст / IME">
         <span class="meta" id="focus-owner">Фокус: вне сцены</span>
         <span class="meta" id="composition-state">IME: неактивна</span>
+        <button type="button" id="toggle-disabled">Отключить кнопку Rust</button>
+        <button type="button" id="toggle-present">Удалить кнопку Rust</button>
       </div>
       <button type="button" id="resize">Проверить resize (400 × 300)</button>
-      <p class="warn">Экспериментальный renderer: real RoundedRect и Affine. Есть Stroke (сплошной, без штриховки) и Clip (прямоугольный). Bezier-пути поддерживаются. В R4a есть клавиатурная DOM-проекция одной кнопки и IME fence инспектора. Полная AccessKit→DOM проекция, системный IME в виджете Rust, текстовые глифы, gradient и изображения пока не поддерживаются.</p>
+      <p class="warn">Экспериментальный renderer: real RoundedRect и Affine. Есть Stroke (сплошной, без штриховки) и Clip (прямоугольный). Bezier-пути поддерживаются. В R4c демонстрационная DOM-кнопка проецирует идентификатор AccessKit, disabled, удаление/пересоздание и фокус с реального Rust-виджета; IME fence инспектора сохраняется. Универсальная AccessKit→DOM проекция, системный IME в виджете Rust, текстовые глифы, gradient и изображения пока не поддерживаются.</p>
     </section>
   </div>
 </main>

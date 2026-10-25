@@ -279,9 +279,51 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     const resized=await page.evaluate(()=>window.__masonryProbe.snapshot());
     assert.equal(resized.height,300);
     assert.ok(resized.rects.some(r=>(r.rgba&255)===70));
+    // R4c: live AccessKit properties and actual Rust widget lifecycle must
+    // project to DOM. Execute while the semantic button OWNS focus.
+    await semantic.focus();
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().focusedButton===1);
+    const originalId=await semantic.getAttribute('data-accesskit-id');
+    assert.ok(originalId&&originalId!=='0');
+    assert.equal(await page.evaluate(()=>
+      window.__masonryProbe.snapshot().accessFocusId),
+      originalId,'focused AccessKit NodeId must equal projected DOM identity');
+    await page.evaluate(()=>window.__masonryProbe.setButtonDisabled(true));
+    await page.waitForFunction(()=>document.querySelector('#masonry-action')?.disabled===true);
+    assert.equal(await semantic.getAttribute('data-accesskit-id'),originalId);
+    assert.equal(await inspector.evaluate(el=>document.activeElement===el),true,
+      'disabling focused Rust button must transfer focus to inspector');
+    const disabled=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(disabled.accessButtonDisabled,1);
+    assert.equal(disabled.focusedButton,0);
+    const disabledClicks=disabled.clicks;
+    await page.evaluate(()=>window.__masonryProbe.setButtonDisabled(false));
+    await page.waitForFunction(()=>document.querySelector('#masonry-action')?.disabled===false);
+    assert.equal(await semantic.getAttribute('data-accesskit-id'),originalId);
+    await page.evaluate(()=>window.__masonryProbe.setButtonPresent(false));
+    await page.waitForFunction(()=>document.querySelector('#masonry-action')===null);
+    const missing=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(missing.accessButtonId,'0');
+    assert.equal(missing.semanticButtonId,-1);
+    assert.equal(missing.clicks,disabledClicks);
+    await page.evaluate(()=>window.__masonryProbe.setButtonPresent(true));
+    await page.waitForFunction(()=>document.querySelector('#masonry-action')?.dataset.accesskitId);
+    const replacementId=await semantic.getAttribute('data-accesskit-id');
+    assert.ok(replacementId&&replacementId!=='0'&&replacementId!==originalId,
+      'recreated Rust widget must project a NEW AccessKit NodeId');
+    await semantic.focus();
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().focusedButton===1);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(expected=>
+      window.__masonryProbe.snapshot().clicks===expected,disabledClicks+1);
+    await page.waitForTimeout(100);
+    assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().clicks),
+      disabledClicks+1,'recreated button doubled Enter activation');
     assert.deepEqual(errors,[]);
     await page.screenshot({path:'test-results/masonry-'+name+'.png',fullPage:true});
-    console.log('PASS '+name+' R4b AccessKit Button/Click gate, detail=0 activation, no duplicate keyboard click; R4a/R3b preserved');
+    console.log('PASS '+name+' R4c AccessKit NodeId/disabled/removal/recreation/focus plus R4b/R4a/R3b');
   }catch(error){
     await page.screenshot({path:'test-results/masonry-'+name+'-FAIL.png',fullPage:true}).catch(()=>{});
     console.error('FAIL '+name,error.stack,errors);throw error;

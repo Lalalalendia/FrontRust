@@ -139,10 +139,14 @@ mod browser_host {
         scene_layers: i32,
         accessibility_nodes: i32,
         accessible_button: bool,
+        access_button_id: Option<u64>,
+        access_button_disabled: bool,
+        access_focus_id: u64,
         skipped_draws: i32,
         clicks: Rc<Cell<i32>>,
         curve_tag: WidgetTag<Canvas>,
         button_tag: WidgetTag<Button>,
+        root_tag: WidgetTag<Flex>,
         keyboard_events: i32,
     }
 
@@ -168,6 +172,7 @@ mod browser_host {
             let curve_tag: WidgetTag<Canvas> = WidgetTag::unique();
             // Stable semantic identity of the demo's one real keyboard-focusable button.
             let button_tag: WidgetTag<Button> = WidgetTag::named("frontrust-primary-action");
+            let root_tag: WidgetTag<Flex> = WidgetTag::named("frontrust-demo-root");
             let root_widget = Flex::column()
                 .with_fixed(tile(Color::from_rgb8(70, 120, 210), true))
                 .with_fixed(
@@ -202,7 +207,7 @@ mod browser_host {
                     )
                     .prepare()
                 )
-                .prepare();
+                .prepare().with_tag(root_tag);
             let clicks = Rc::new(Cell::new(0_i32));
             let action_clicks = Rc::clone(&clicks);
             let mut root = RenderRoot::new(
@@ -250,7 +255,8 @@ mod browser_host {
             let mut host = Self {
                 root, rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
                 accessibility_nodes: 0, accessible_button: false,
-                skipped_draws: 0, clicks, curve_tag, button_tag,
+                access_button_id: None, access_button_disabled: false, access_focus_id: 0,
+                skipped_draws: 0, clicks, curve_tag, button_tag, root_tag,
                 keyboard_events: 0,
             };
             host.redraw();
@@ -262,15 +268,25 @@ mod browser_host {
             // subsequent frames omit unchanged nodes.
             let button_node_id = self.root.get_widget_with_tag(self.button_tag)
                 .map(|widget| AccessNodeId::from(widget.id()));
+            // Removal/recreation changes the real WidgetId. Never reuse stale
+            // accessibility metadata from the previous instance.
+            if self.access_button_id != button_node_id.map(|id| id.0) {
+                self.access_button_id = None;
+                self.accessible_button = false;
+                self.access_button_disabled = false;
+            }
             let (plan, access) = self.root.redraw();
             self.scene_layers = plan.layers.len() as i32;
             if let Some(tree) = access {
                 self.accessibility_nodes = tree.nodes.len() as i32;
+                self.access_focus_id = tree.focus.0;
                 if let Some(target_id) = button_node_id {
                     for (node_id, node) in &tree.nodes {
                         if *node_id == target_id {
+                            self.access_button_id = Some(target_id.0);
                             self.accessible_button = node.role() == AccessRole::Button
                                 && node.supports_action(AccessAction::Click);
+                            self.access_button_disabled = node.is_disabled();
                         }
                     }
                 }
@@ -451,6 +467,57 @@ mod browser_host {
             }
         }
 
+        pub fn access_button_id(&self) -> u64 {
+            if self.semantic_button_id() == 1 {
+                self.access_button_id.unwrap_or(0)
+            } else {
+                0
+            }
+        }
+
+        pub fn access_button_disabled(&self) -> i32 {
+            if self.access_button_id() == 0 { -1 }
+            else { i32::from(self.access_button_disabled) }
+        }
+
+        // Modify an actual Rust widget, then observe the updated AccessKit
+        // node in the *next* RenderRoot accessibility pass.
+        pub fn set_button_disabled(&mut self, disabled: bool) -> i32 {
+            if self.root.get_widget_with_tag(self.button_tag).is_none() { return -1; }
+            if disabled { self.root.focus_on(None); }
+            self.root.edit_widget_with_tag(self.button_tag, |mut button| {
+                button.ctx.set_disabled(disabled);
+            });
+            self.redraw();
+            self.access_button_disabled()
+        }
+
+        // Remove/reinsert the real Rust Button at its original Flex index.
+        // Keeping a spacer avoids changing the independent R3b drawing layout.
+        pub fn set_button_present(&mut self, present: bool) -> i32 {
+            let was_present = self.root.get_widget_with_tag(self.button_tag).is_some();
+            if was_present == present { return i32::from(present); }
+            if !present {
+                self.root.focus_on(None);
+                self.root.edit_widget_with_tag(self.root_tag, |mut root| {
+                    Flex::set_fixed_spacer(&mut root, 1, Length::const_px(50.0));
+                });
+            } else {
+                let tag = self.button_tag;
+                let child = NewWidget::new(
+                    SizedBox::empty().size(Length::const_px(120.0), Length::const_px(50.0))
+                ).with_props(
+                    PropertySet::one(Background::Color(Color::from_rgb8(195, 145, 105)))
+                        .with(CornerRadius::all(18.px()))
+                );
+                self.root.edit_widget_with_tag(self.root_tag, |mut root| {
+                    Flex::set_fixed(&mut root, 1, NewWidget::new(Button::new(child)).with_tag(tag));
+                });
+            }
+            self.redraw();
+            i32::from(self.semantic_button_id() == 1)
+        }
+
         // Focus only the actual tagged Masonry Button. The DOM mirror is
         // a semantic keyboard/accessibility projection, not a second action.
         pub fn focus_button(&mut self, should_focus: bool) -> i32 {
@@ -459,7 +526,7 @@ mod browser_host {
             } else {
                 None
             };
-            if should_focus && id.is_none() { return -1; }
+            if should_focus && (id.is_none() || self.access_button_disabled) { return -1; }
             if !self.root.focus_on(id) { return -1; }
             self.redraw();
             self.focused_button()
@@ -539,6 +606,40 @@ mod browser_host {
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_semantic_button_id() -> i32 { get_i32(|h| h.semantic_button_id()) }
+
+    // AccessKit NodeId is a 64-bit identity: WASM JS must preserve it as
+    // BigInt, never truncate to a floating-point numeric DOM ID.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_access_button_id() -> u64 {
+        HOST.with(|host| host.borrow().as_ref().map(|h| h.access_button_id()).unwrap_or(0))
+    }
+
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_access_button_disabled() -> i32 {
+        get_i32(|h| h.access_button_disabled())
+    }
+
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_access_focus_id() -> u64 {
+        HOST.with(|host| host.borrow().as_ref().map(|h| h.access_focus_id).unwrap_or(0))
+    }
+
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_set_button_disabled(disabled: i32) -> i32 {
+        HOST.with(|host| host.borrow_mut().as_mut()
+            .map(|h| h.set_button_disabled(disabled != 0)).unwrap_or(-1))
+    }
+
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_set_button_present(present: i32) -> i32 {
+        HOST.with(|host| host.borrow_mut().as_mut()
+            .map(|h| h.set_button_present(present != 0)).unwrap_or(-1))
+    }
 
     // SAFETY: scalar ABI.
     #[allow(unsafe_code)]
@@ -849,6 +950,37 @@ mod browser_host {
             assert!(h.rects.iter().any(|r|
                 r.rgba == Color::from_rgb8(70,120,210).to_rgba8().to_u32()),
                 "valid independent widgets must still be retained");
+        }
+
+        #[test]
+        fn r4c_real_accesskit_identity_disabled_removal_and_focus() {
+            let mut h = BrowserHost::new(320, 360);
+            let old_id = h.access_button_id();
+            assert_ne!(old_id, 0, "real tagged AccessKit button must have a NodeId");
+            assert_eq!(h.access_button_disabled(), 0);
+            assert_eq!(h.focus_button(true), 1);
+            assert_eq!(h.access_focus_id, old_id, "tree focus must match Rust WidgetId");
+            assert_eq!(h.set_button_disabled(true), 1, "disabled bit must reach AccessKit");
+            assert_eq!(h.access_button_id(), old_id, "disable must not replace WidgetId");
+            assert_eq!(h.focused_button(), 0, "disabled button must lose Rust focus");
+            assert_eq!(h.keyboard_button(false, 1), -1, "disabled button cannot activate");
+            assert_eq!(h.set_button_disabled(false), 0);
+            assert_eq!(h.access_button_id(), old_id, "enable must preserve WidgetId");
+            assert_eq!(h.set_button_present(false), 0);
+            assert_eq!(h.access_button_id(), 0, "removed node must leave projection");
+            assert_eq!(h.access_button_disabled(), -1);
+            assert_eq!(h.focus_button(true), -1);
+            assert_eq!(h.set_button_present(true), 1);
+            let new_id = h.access_button_id();
+            assert_ne!(new_id, 0);
+            assert_ne!(new_id, old_id, "new Rust widget must get fresh AccessKit NodeId");
+            assert_eq!(h.access_button_disabled(), 0);
+            assert_eq!(h.focus_button(true), 1);
+            assert_eq!(h.access_focus_id, new_id);
+            let clicks = h.clicks.get();
+            assert_eq!(h.keyboard_button(true, 1), clicks);
+            assert_eq!(h.keyboard_button(false, 1), clicks + 1);
+            assert_eq!(h.skipped_draws, 0);
         }
 
         #[test]
