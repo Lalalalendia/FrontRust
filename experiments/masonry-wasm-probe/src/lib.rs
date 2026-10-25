@@ -19,7 +19,7 @@ pub fn masonry_native_host_type_size() -> usize {
 #[cfg(feature = "widgets")]
 mod browser_host {
     use masonry::app::{RenderRoot, RenderRootOptions, RenderRootSignal, WindowSizePolicy};
-    use masonry::core::{NewWidget, PropertySet, Widget, WidgetTag, WindowEvent};
+    use masonry::core::{NewWidget, PropertySet, TextEvent, Widget, WidgetTag, WindowEvent};
     use masonry::imaging::record::Clip;
     use masonry::dpi::{PhysicalPosition, PhysicalSize};
     use masonry::imaging::{Painter, record::{Command, Draw, Geometry, Scene}};
@@ -28,7 +28,7 @@ mod browser_host {
     use masonry::peniko::{Brush, Color, Fill};
     use masonry::properties::{Background, BorderColor, BorderWidth, ContentColor, CornerRadius, Dimensions};
     use masonry::theme::default_property_set;
-    use masonry::ui_events::keyboard::Modifiers;
+    use masonry::ui_events::keyboard::{Key, Modifiers, NamedKey};
     use masonry::ui_events::pointer::{
         PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
         PointerType,
@@ -140,6 +140,8 @@ mod browser_host {
         skipped_draws: i32,
         clicks: Rc<Cell<i32>>,
         curve_tag: WidgetTag<Canvas>,
+        button_tag: WidgetTag<Button>,
+        keyboard_events: i32,
     }
 
     impl BrowserHost {
@@ -162,9 +164,14 @@ mod browser_host {
             // Applying an affine widget transform tests the full matrix pipeline.
             let arrow_tag: WidgetTag<DisclosureButton> = WidgetTag::unique();
             let curve_tag: WidgetTag<Canvas> = WidgetTag::unique();
+            // Stable semantic identity of the demo's one real keyboard-focusable button.
+            let button_tag: WidgetTag<Button> = WidgetTag::named("frontrust-primary-action");
             let root_widget = Flex::column()
                 .with_fixed(tile(Color::from_rgb8(70, 120, 210), true))
-                .with_fixed(NewWidget::new(Button::new(tile(Color::from_rgb8(195, 145, 105), false))))
+                .with_fixed(
+                    NewWidget::new(Button::new(tile(Color::from_rgb8(195, 145, 105), false)))
+                        .with_tag(button_tag)
+                )
                 // A real Portal (80px viewport) clips its 120px-wide green child.
                 // This exercises PushClip / Draw / PopClip from Masonry's paint pass.
                 .with_fixed(
@@ -240,7 +247,8 @@ mod browser_host {
             root.handle_window_event(WindowEvent::EnableAccessTree);
             let mut host = Self {
                 root, rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
-                accessibility_nodes: 0, skipped_draws: 0, clicks, curve_tag,
+                accessibility_nodes: 0, skipped_draws: 0, clicks, curve_tag, button_tag,
+                keyboard_events: 0,
             };
             host.redraw();
             host
@@ -417,6 +425,42 @@ mod browser_host {
             self.clicks.get()
         }
 
+        // Focus only the actual tagged Masonry Button. The DOM mirror is
+        // a semantic keyboard/accessibility projection, not a second action.
+        pub fn focus_button(&mut self, should_focus: bool) -> i32 {
+            let id = if should_focus {
+                self.root.get_widget_with_tag(self.button_tag).map(|w| w.id())
+            } else {
+                None
+            };
+            if should_focus && id.is_none() { return -1; }
+            if !self.root.focus_on(id) { return -1; }
+            self.redraw();
+            self.focused_button()
+        }
+
+        pub fn focused_button(&self) -> i32 {
+            let id = self.root.get_widget_with_tag(self.button_tag).map(|w| w.id());
+            if id.is_some() && self.root.focused_widget() == id { 1 } else { 0 }
+        }
+
+        // 1=Enter; 2=Space. Reject all other keys, and do not route commands
+        // without Rust focus. KeyUp triggers the upstream ButtonPress.
+        pub fn keyboard_button(&mut self, down: bool, code: i32) -> i32 {
+            if self.focused_button() != 1 { return -1; }
+            let key = match code {
+                1 => Key::Named(NamedKey::Enter),
+                2 => Key::Character(" ".into()),
+                _ => return -2,
+            };
+            self.keyboard_events = self.keyboard_events.saturating_add(1);
+            let event = if down { TextEvent::key_down(key) }
+                else { TextEvent::key_up(key) };
+            self.root.handle_text_event(event);
+            self.redraw();
+            self.clicks.get()
+        }
+
         pub fn size(&self) -> (i32, i32) {
             let size = self.root.size();
             (size.width as i32, size.height as i32)
@@ -464,6 +508,37 @@ mod browser_host {
     pub extern "C" fn mp_pointer(down: i32, x: f64, y: f64) -> i32 {
         HOST.with(|host| host.borrow_mut().as_mut().map(|h| h.pointer(down != 0, x, y)).unwrap_or(-1))
     }
+
+    // SAFETY: all ABI exports pass only scalar values and no pointers.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_semantic_button_id() -> i32 { 1 }
+
+    // SAFETY: scalar ABI.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_focus_button(focus: i32) -> i32 {
+        HOST.with(|host| host.borrow_mut().as_mut()
+            .map(|h| h.focus_button(focus != 0)).unwrap_or(-1))
+    }
+
+    // SAFETY: scalar ABI.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_focused_button() -> i32 { get_i32(|h| h.focused_button()) }
+
+    // SAFETY: scalar ABI.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_keyboard_button(down: i32, key_code: i32) -> i32 {
+        HOST.with(|host| host.borrow_mut().as_mut()
+            .map(|h| h.keyboard_button(down != 0, key_code)).unwrap_or(-1))
+    }
+
+    // SAFETY: scalar ABI.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_keyboard_event_count() -> i32 { get_i32(|h| h.keyboard_events) }
 
     // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
     #[allow(unsafe_code)]
@@ -748,6 +823,30 @@ mod browser_host {
             assert!(h.rects.iter().any(|r|
                 r.rgba == Color::from_rgb8(70,120,210).to_rgba8().to_u32()),
                 "valid independent widgets must still be retained");
+        }
+
+        #[test]
+        fn real_masonry_focus_and_keyboard_ownership_gate() {
+            let mut h = BrowserHost::new(320, 360);
+            let start = h.clicks.get();
+            assert_eq!(h.focused_button(), 0);
+            assert_eq!(h.keyboard_button(false, 1), -1,
+                "Unfocused scene MUST NOT receive keyboard activation");
+            assert_eq!(h.keyboard_events, 0);
+            assert_eq!(h.focus_button(true), 1);
+            assert_eq!(h.keyboard_button(true, 1), start);
+            assert_eq!(h.keyboard_button(false, 1), start + 1,
+                "real Masonry Button must emit ButtonPress on Enter key-up");
+            assert_eq!(h.keyboard_button(true, 2), start + 1);
+            assert_eq!(h.keyboard_button(false, 2), start + 2,
+                "real Masonry Button must emit ButtonPress on Space key-up");
+            assert_eq!(h.keyboard_button(true, 42), -2, "unknown key must fail closed");
+            assert_eq!(h.keyboard_events, 4);
+            assert_eq!(h.focus_button(false), 0);
+            assert_eq!(h.keyboard_button(false, 1), -1);
+            assert_eq!(h.keyboard_events, 4, "blur must fence keyboard events");
+            assert_eq!(h.clicks.get(), start + 2);
+            assert_eq!(h.skipped_draws, 0);
         }
 
         #[test]

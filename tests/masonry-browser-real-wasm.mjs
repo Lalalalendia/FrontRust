@@ -200,6 +200,58 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     await page.waitForFunction(()=>window.__masonryProbe.snapshot().clicks===1,{timeout:10000});
     await page.waitForFunction(()=>document.querySelector('#clicks')?.textContent==='1',{timeout:10000});
     assert.equal(await page.locator('#clicks').textContent(),'1');
+
+    // R4a: DOM focus is projected onto the real tagged Rust/Masonry Button.
+    // Keep R3b pointer click count (=1) and prove two independent keyboard
+    // activation paths from actual browser key events.
+    const semantic=page.locator('#masonry-action');
+    const inspector=page.locator('#masonry-inspector');
+    assert.equal(await semantic.getAttribute('data-semantic-id'),'1');
+    await semantic.focus();
+    await page.waitForFunction(()=>window.__masonryProbe.snapshot().focusedButton===1);
+    const startEvents=await page.evaluate(()=>window.__masonryProbe.snapshot().keyboardEvents);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(()=>window.__masonryProbe.snapshot().clicks===2);
+    await page.keyboard.press('Space');
+    await page.waitForFunction(()=>window.__masonryProbe.snapshot().clicks===3);
+    assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().keyboardEvents),startEvents+4);
+    // Browser-native Tab order moves into the inspector, and the Rust scene
+    // loses focus. Delete/Enter/Undo while typing MUST NOT reach the scene.
+    await page.keyboard.press('Tab');
+    assert.equal(await inspector.evaluate(el=>document.activeElement===el),true);
+    await page.waitForFunction(()=>window.__masonryProbe.snapshot().focusedButton===0);
+    const fenced=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    await inspector.fill('editor text');
+    await page.keyboard.press('Delete');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Control+z');
+    const afterInspector=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(afterInspector.keyboardEvents,fenced.keyboardEvents);
+    assert.equal(afterInspector.clicks,3);
+    assert.equal(afterInspector.owner,'inspector');
+    // Simulated composition verifies the explicit browser composition fence;
+    // this is NOT proof of OS-level RU/JP IME correctness.
+    await inspector.evaluate(el=>el.dispatchEvent(new CompositionEvent('compositionstart',{
+      bubbles:true,data:'に'
+    })));
+    assert.equal(await page.evaluate(()=>window.__masonryProbe.composing),true);
+    await semantic.focus();
+    assert.equal(await page.evaluate(()=>window.__masonryProbe.focusOwner()),'composition');
+    const beforeComposition=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Space');
+    const blocked=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(blocked.clicks,beforeComposition.clicks,'IME must fence scene activation');
+    assert.equal(blocked.keyboardEvents,beforeComposition.keyboardEvents,'IME leaked keys to Rust');
+    await inspector.evaluate(el=>el.dispatchEvent(new CompositionEvent('compositionend',{
+      bubbles:true,data:'に'
+    })));
+    assert.equal(await page.evaluate(()=>window.__masonryProbe.composing),false);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(()=>window.__masonryProbe.snapshot().clicks===4);
+    await inspector.focus();
+    assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().focusedButton),0);
+    assert.equal(await inspector.inputValue(),'editor text','Scene keyboard routing mutated inspector text');
     await page.locator('#resize').click();
     await page.waitForFunction(()=>window.__masonryProbe.snapshot().width===400,{timeout:10000});
     const resized=await page.evaluate(()=>window.__masonryProbe.snapshot());
@@ -207,7 +259,7 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.ok(resized.rects.some(r=>(r.rgba&255)===70));
     assert.deepEqual(errors,[]);
     await page.screenshot({path:'test-results/masonry-'+name+'.png',fullPage:true});
-    console.log('PASS '+name+' real Masonry R3b QuadTo+CurveTo midpoint pixels, negative fail-closed, nested clips and ButtonPress');
+    console.log('PASS '+name+' R4a real Rust/Masonry Enter+Space, focus ownership and IME fence; R3b pixels intact');
   }catch(error){
     await page.screenshot({path:'test-results/masonry-'+name+'-FAIL.png',fullPage:true}).catch(()=>{});
     console.error('FAIL '+name,error.stack,errors);throw error;

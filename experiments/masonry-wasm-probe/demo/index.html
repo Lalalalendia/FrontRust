@@ -15,6 +15,11 @@
     .layout{display:flex;flex-wrap:wrap;gap:25px;align-items:flex-start}
     .surface{padding:14px;background:#101e33;border:1px solid #43577d;border-radius:14px}
     canvas{display:block;background:#f8fbff;max-width:100%;cursor:pointer;touch-action:none}
+    button:focus-visible,input:focus-visible{outline:3px solid #ffce63;outline-offset:3px}
+    .semantic-controls{display:flex;flex-direction:column;align-items:stretch;gap:9px;margin:16px 0}
+    .semantic-controls label{font-size:13px;color:#cad9f5}
+    .semantic-controls input{background:#0e1a2d;color:#e6eeff;border:1px solid #6783af;padding:10px;border-radius:8px}
+    .semantic-controls .meta{font-size:12px;color:#c1d4f2}
     .panel{flex:1;min-width:240px;padding:18px;background:#172843;border-radius:14px}
     .label{font-size:12px;color:#97afd3}.value{font-size:19px;margin:4px 0 16px}
     button{background:#3863bb;border:0;border-radius:9px;color:white;padding:10px 14px;cursor:pointer}
@@ -28,7 +33,7 @@
   <p>Набор реальных виджетов, <code>RenderRoot</code> и графические команды из Rust/WASM. Canvas2D отображает реальные Masonry-примитивы: заливки, контуры, два вложенных клипа, повёрнутую стрелку и две кривые QuadTo/CurveTo из Rust. Текст, композитные группы и градиенты пока не реализованы.</p>
   <div class="layout">
     <section class="surface" aria-label="Masonry Canvas2D">
-      <canvas id="masonry-canvas" width="320" height="360" tabindex="0" aria-label="Экспериментальный холст: второй коричневый блок является кнопкой"></canvas>
+      <canvas id="masonry-canvas" width="320" height="360" aria-hidden="true"></canvas>
     </section>
     <section class="panel">
       <div class="label">WASM engine</div><div class="value" id="status" role="status">Загрузка…</div>
@@ -36,8 +41,15 @@
       <div class="label">Painted rectangles</div><div class="value" id="rectangles">—</div>
       <div class="label">AccessKit nodes</div><div class="value" id="access">—</div>
       <div class="label">Rust ButtonPress count</div><div class="value" id="clicks">0</div>
+      <div class="semantic-controls" role="group" aria-label="Семантические элементы сцены и инспектора">
+        <button type="button" id="masonry-action" data-semantic-id="pending">Активировать кнопку Masonry</button>
+        <label for="masonry-inspector">Поле инспектора (клавиши остаются в тексте)</label>
+        <input id="masonry-inspector" type="text" autocomplete="off" placeholder="Текст / IME">
+        <span class="meta" id="focus-owner">Фокус: вне сцены</span>
+        <span class="meta" id="composition-state">IME: неактивна</span>
+      </div>
       <button type="button" id="resize">Проверить resize (400 × 300)</button>
-      <p class="warn">Экспериментальный renderer: real RoundedRect и Affine. Есть Stroke (сплошной, без штриховки) и Clip (прямоугольный). Bezier-пути поддерживаются. Пока нет текста, gradient, изображений и screen-reader bridge.</p>
+      <p class="warn">Экспериментальный renderer: real RoundedRect и Affine. Есть Stroke (сплошной, без штриховки) и Clip (прямоугольный). Bezier-пути поддерживаются. В R4a есть клавиатурная DOM-проекция одной кнопки и IME fence инспектора. Полная AccessKit→DOM проекция, системный IME в виджете Rust, текстовые глифы, gradient и изображения пока не поддерживаются.</p>
     </section>
   </div>
 </main>

@@ -16,7 +16,9 @@ const symbols=[
   'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f',
   'mp_op_count','mp_op_kind','mp_op_shape','mp_op_stroke_width',
   'mp_op_stroke_join','mp_op_miter_limit','mp_op_stroke_cap',
-  'mp_rect_path_count','mp_rect_path_kind','mp_rect_path_arg'
+  'mp_rect_path_count','mp_rect_path_kind','mp_rect_path_arg',
+  'mp_semantic_button_id','mp_focus_button','mp_focused_button',
+  'mp_keyboard_button','mp_keyboard_event_count'
 ];
 for(const s of symbols)assert.equal(typeof e[s],'function','missing exported '+s);
 assert.equal(e.mp_version(),1);
@@ -137,9 +139,24 @@ assert.equal(e.mp_click_count(),0);
 e.mp_pointer(1,x,y);
 e.mp_pointer(0,x,y);
 assert.equal(e.mp_click_count(),1,'Masonry ButtonPress must be dispatched by RenderRoot');
+const oldEvents=e.mp_keyboard_event_count();
+assert.equal(e.mp_semantic_button_id(),1,'semantic button identity should be stable');
+assert.equal(e.mp_focus_button(0),0);
+assert.equal(e.mp_keyboard_button(0,1),-1,'Unfocused button must reject Enter');
+assert.equal(e.mp_keyboard_event_count(),oldEvents,'unfocused Enter must not reach Rust');
+assert.equal(e.mp_focus_button(1),1);
+assert.equal(e.mp_keyboard_button(1,1),1,'Enter down must not activate button');
+assert.equal(e.mp_keyboard_button(0,1),2,'Enter up must activate real Masonry ButtonPress');
+assert.equal(e.mp_keyboard_button(1,2),2);
+assert.equal(e.mp_keyboard_button(0,2),3,'Space up must activate real Masonry ButtonPress');
+assert.equal(e.mp_keyboard_button(1,42),-2,'Unknown key must fail closed');
+assert.equal(e.mp_keyboard_event_count(),oldEvents+4);
+assert.equal(e.mp_focus_button(0),0);
+assert.equal(e.mp_keyboard_button(0,1),-1);
+assert.equal(e.mp_keyboard_event_count(),oldEvents+4,'blur must fence all scene commands');
 assert.ok(e.mp_resize(400,300)>=2,'resize must repaint actual Masonry scene');
 assert.deepEqual([e.mp_width(),e.mp_height()],[400,300]);
 rects=getRects();
 assert.ok(rects.some(r=>r.rgba===blue));
 assert.ok(rects.some(r=>r.rgba===brown));
-console.log('PASS R3b native Masonry Canvas QuadTo/CurveTo ABI, nested clips, transformed BezPath, ButtonPress and resize');
+console.log('PASS R4a real Masonry keyboard Enter/Space + focus fence and R3b geometry/resize');

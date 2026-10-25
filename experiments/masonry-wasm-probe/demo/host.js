@@ -2,6 +2,9 @@ import initWasm from './gen/masonry_probe.js';
 const canvas=document.querySelector('#masonry-canvas');
 const ctx=canvas.getContext('2d',{alpha:false});
 const el=id=>document.getElementById(id);
+const semanticAction=el('masonry-action');
+const inspector=el('masonry-inspector');
+let compositionActive=false;
 let engine=null;
 let scheduled=false;
 let lastSnapshot=null;
@@ -16,9 +19,37 @@ const required=[
   'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f',
   'mp_op_count','mp_op_kind','mp_op_shape','mp_op_stroke_width',
   'mp_op_stroke_join','mp_op_miter_limit','mp_op_stroke_cap',
-  'mp_rect_path_count','mp_rect_path_kind','mp_rect_path_arg'
+  'mp_rect_path_count','mp_rect_path_kind','mp_rect_path_arg',
+  'mp_semantic_button_id','mp_focus_button','mp_focused_button',
+  'mp_keyboard_button','mp_keyboard_event_count'
 ];
 
+
+function focusOwner(){
+  // Never treat visual DOM nodes as semantic owners. Only the projection
+  // button or a real editor input can own keyboard interpretation.
+  if(compositionActive)return 'composition';
+  if(document.activeElement===semanticAction)return 'scene';
+  if(document.activeElement===inspector)return 'inspector';
+  return 'none';
+}
+function updateFocusLabels(){
+  el('focus-owner').textContent='Фокус: '+focusOwner();
+  el('composition-state').textContent='IME: '+(compositionActive?'композиция':'неактивна');
+}
+function handleSceneKey(event){
+  if(event.key!=='Enter'&&event.key!==' ')return;
+  // Suppress browser auto-click for the projected DOM button; the actual
+  // ButtonPress must always come from Rust/Masonry TextEvent.
+  event.preventDefault();
+  if(compositionActive||event.isComposing||event.ctrlKey||event.metaKey||event.altKey)return;
+  if(document.activeElement!==semanticAction)return;
+  if(engine.mp_focused_button()!==1)throw Error('Scene key with no Rust focus');
+  const code=event.key==='Enter'?1:2;
+  if(engine.mp_keyboard_button(event.type==='keydown'?1:0,code)<0)
+    throw Error('Rust refused focused Masonry key');
+  requestPaint();
+}
 function sceneRects(){
   const count=engine.mp_rect_count();
   if(count<0||count>128)throw Error('Invalid WASM scene rect count: '+count);
@@ -60,7 +91,11 @@ function snapshot(){
     layers:engine.mp_layer_count(),
     accessNodes:engine.mp_access_nodes(),
     skippedDraws:engine.mp_skipped_draws(),
-    clicks:engine.mp_click_count(),rects:sceneRects(),ops:sceneOps()};
+    clicks:engine.mp_click_count(),rects:sceneRects(),ops:sceneOps(),
+    semanticButtonId:engine.mp_semantic_button_id(),
+    focusedButton:engine.mp_focused_button(),
+    keyboardEvents:engine.mp_keyboard_event_count(),
+    composing:compositionActive,owner:focusOwner()};
 }
 function validateScene(scene){
   // Refuse incomplete snapshots BEFORE changing the displayed framebuffer.
@@ -173,11 +208,40 @@ try{
   for(const name of required)if(typeof engine[name]!=='function')throw Error('Missing Masonry WASM ABI: '+name);
   if(engine.mp_version()!==1)throw Error('Unknown Masonry ABI revision');
   if(engine.mp_init(canvas.width,canvas.height)<2)throw Error('No real Masonry fills found');
+  if(engine.mp_semantic_button_id()!==1)throw Error('Unsupported semantic projection revision');
+  semanticAction.dataset.semanticId=String(engine.mp_semantic_button_id());
+  semanticAction.addEventListener('focus',()=>{
+    if(engine.mp_focus_button(1)!==1)throw Error('Rust Button focus refused');
+    updateFocusLabels();requestPaint();
+  });
+  semanticAction.addEventListener('blur',()=>{
+    engine.mp_focus_button(0);updateFocusLabels();requestPaint();
+  });
+  semanticAction.addEventListener('keydown',handleSceneKey);
+  semanticAction.addEventListener('keyup',handleSceneKey);
+  semanticAction.addEventListener('click',event=>{
+    if(event.detail===0||compositionActive)return; // keyboard handled by TextEvent, not synthetic click
+    if(engine.mp_focused_button()!==1)engine.mp_focus_button(1);
+    engine.mp_keyboard_button(1,1);engine.mp_keyboard_button(0,1);
+    requestPaint();
+  });
+  inspector.addEventListener('focus',updateFocusLabels);
+  inspector.addEventListener('blur',updateFocusLabels);
+  inspector.addEventListener('compositionstart',()=>{
+    compositionActive=true;updateFocusLabels();
+  });
+  inspector.addEventListener('compositionend',()=>{
+    compositionActive=false;updateFocusLabels();
+  });
   canvas.addEventListener('pointerdown',event=>{
     if(event.button!==0)return;
     const p=position(event);
     canvas.setPointerCapture(event.pointerId);
     engine.mp_pointer(1,p.x,p.y);
+    // Pointer focus established by real Masonry Button; mirror it to the
+    // one keyboard-addressable DOM semantic target.
+    if(!compositionActive&&engine.mp_focused_button()===1)
+      semanticAction.focus({preventScroll:true});
     requestPaint();
   });
   canvas.addEventListener('pointerup',event=>{
@@ -190,7 +254,12 @@ try{
   requestPaint();
   el('status').textContent='Real Rust/WASM RenderRoot';
   // Exposed only for deterministic browser harness assertions.
-  window.__masonryProbe={snapshot,resize,validateScene,get lastSnapshot(){return lastSnapshot}};
+  updateFocusLabels();
+  window.__masonryProbe={
+    snapshot,resize,validateScene,focusOwner,
+    get composing(){return compositionActive},
+    get lastSnapshot(){return lastSnapshot}
+  };
 }catch(err){
   el('status').textContent='ERROR: '+err.message;
   console.error(err);
