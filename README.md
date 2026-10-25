@@ -10,7 +10,7 @@ A **product-independent** Rust UI architecture with two independently tested bro
 - `web/app.js`: event/Canvas adapter. It owns only transient drag state, *not* document state.
 - `web/mock-engine.js`: preview/test fixture only. Not loaded by real Rust server.
 - `tests`: real WASM ABI, Chromium/Firefox E2E for DOM + Canvas, plus separate mock-fixture tests. E2E without the Rust binary is **not** treated as a pass.
-- `experiments/masonry-wasm-probe`: standalone pinned-upstream Xilem/Masonry Cargo workspace, real `RenderRoot`, two widgets, scene export, BrowserHost pointer/resize, generated `wasm-bindgen` glue, Canvas2D demo and real Chromium/Firefox E2E.
+- `experiments/masonry-wasm-probe`: standalone pinned-upstream Xilem/Masonry Cargo workspace, real `RenderRoot`, nested Portals, transformed BezPath, ordered scene export, BrowserHost pointer/resize, generated `wasm-bindgen` glue, Canvas2D demo and real Chromium/Firefox E2E.
 - `docs`: inventoried donor sources, dependency/ownership constraints and remaining Masonry Web acceptance gates.
 
 ## Real Rust/WASM path (requires Rust toolchain)
@@ -51,7 +51,8 @@ node tests/wasm-abi.test.mjs # real WASM, not a JS mock
 GitHub Actions run in `Lalalalendia/FrontRust` on the feature branch and on pull requests. Refer to these concrete proven gates:
 
 - [SSR + DOM/Canvas + Rust/WASM Chrome/Firefox — PASS](https://github.com/Lalalalendia/FrontRust/actions/runs/40190033411)
-- [Real Masonry RenderRoot + wasm-bindgen + Node + Chromium/Firefox — PASS](https://github.com/Lalalalendia/FrontRust/actions/runs/40190033470)
+- [Real Masonry R3: nested clips, rotated BezPath, Rust/WASM/Node/Chromium/Firefox — PASS](https://github.com/Lalalalendia/FrontRust/actions/runs/40201480153)
+- [SSR/DOM + Rust/WASM browser checks — PASS on prior code commit](https://github.com/Lalalalendia/FrontRust/actions/runs/40199274590)
 - [Masonry wasm32 compatibility matrix](https://github.com/Lalalalendia/FrontRust/actions/runs/40190033421) — Core/widgets PASS, native-host known compile error recorded as non-blocking
 
 ## Real Masonry Web proof of concept
@@ -69,13 +70,15 @@ node tests/masonry-runtime-abi.mjs
 python3 -m http.server 8792 --bind 127.0.0.1 --directory experiments/masonry-wasm-probe/demo
 ```
 
-Open `http://127.0.0.1:8792/`. The JavaScript/wasm files in `demo/gen` are generated, not committed. The `masonry_winit` native host cannot compile for WASM at the upstream pinned revision; this experimental BrowserHost does **not** use it. The browser-screenshot artifacts are on [CI run #40190033470](https://github.com/Lalalalendia/FrontRust/actions/runs/40190033470).
+Open `http://127.0.0.1:8792/`. The JavaScript/wasm files in `demo/gen` are generated, not committed. The `masonry_winit` native host cannot compile for WASM at the upstream pinned revision; this experimental BrowserHost does **not** use it. Current browser screenshots and compiled WASM are attached to [R3 CI #40201480153](https://github.com/Lalalalendia/FrontRust/actions/runs/40201480153).
 
 ## Architecture and honest scope
 
 `Rust core -> wasm32 -> browser adapter -> DOM inspector + Canvas.` State, undo and revisions live in `rui-core`.
 
-The independent Masonry experiment adds `RenderRoot -> VisualLayerPlan -> retained Scene -> bounded solid-fill serialization -> Canvas2D`, plus BrowserHost `PointerEvent` and `WindowEvent::Resize`. Node and real browsers execute the same compiled WASM with generated JS imports. The **scope is intentionally limited to rect/rounded-rect solid fills, two widgets and pointer/resize**; it is not a general paint engine. Arbitrary paths, strokes, clips, gradients, text, images, keyboard, native IME, screen-reader projection, DPI and resource scheduling remain separate work.
+The independent Masonry experiment adds `RenderRoot -> VisualLayerPlan -> retained Scene -> ordered semantic paint operations -> Canvas2D`, plus BrowserHost pointer handling and window resize. Actual Rust/WASM exports carry both layout rectangles and bounded `kurbo::BezPath` (MoveTo/LineTo/QuadTo/CurveTo/ClosePath), full affine transforms, solid fill/stroke brush colors, join/cap styles and nested `PushClip/PopClip` scopes. Chromium/Firefox have verified real nested Portals, a rotated open path from `DisclosureButton`, and pixel colors; unlike the main DOM/Canvas prototype, Masonry does **not** yet share its document model.
+
+**Not a complete renderer**: advanced blend/mask groups, arbitrary stroked clips, gradients, images, text glyphs, unbounded curves, and input/accessibility/IME integration are not production-ready. Path Quad/Cubic support is implemented but has not yet had dedicated reference pixel tests. Explicit unsupported-operation counts avoid silently approximating unknown semantics.
 
 The SSR HTML contains real semantic text, canonical/OG metadata, JSON-LD and robots behavior. Local HTTP is intentionally `noindex`; a real deployment needs correct site authority, output escaping/schema validation, CSRF/session/auth, caching, framework-level controls and security review. Do not expose this demo server publicly.
 

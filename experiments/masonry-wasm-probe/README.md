@@ -4,7 +4,7 @@ This experiment builds and runs **upstream Masonry 0.4 source pinned to Xilem re
 
 ## Executable gates
 
-1. Native Rust integration test creates two widgets (a plain colored `SizedBox` and a second colored `SizedBox` inside a real Masonry `Button`), initializes `RenderRoot` without a native window, enables AccessKit, obtains `VisualLayerPlan`, checks scene colors, and resizes.
+1. Native Rust integration test creates genuine `SizedBox`, `Button`, nested `Portal` and transformed `DisclosureButton` widgets, initializes `RenderRoot` without a native window, enables AccessKit, obtains `VisualLayerPlan`, checks scene colors, and resizes.
 2. `wasm32-unknown-unknown` release `cdylib` is actually compiled. Node instantiates its generated wasm-bindgen JavaScript glue and verifies scene colors, AccessKit nodes, pointer down/up `ButtonPress` and window resize.
 3. Chromium and Firefox load **that same WASM**, replay real Masonry scene layers into a minimal Canvas2D bridge, verify pixels are painted from Rust scene colors, click a Masonry Button and check Rust callback count, and resize the scene.
 
@@ -12,7 +12,7 @@ Use `cargo test --features widgets --manifest-path experiments/masonry-wasm-prob
 
 ## Real but limited: transport contract
 
-The bridge uses `VisualLayerPlan::replay_into` and Imaging's retained `Scene`. It transports **only solid Rect/RoundedRect fills** via typed numeric WASM exports. It deliberately does not support every Drawing primitive, transform, clip or layer effect, text, gradient, stroke, image or OffscreenCanvas. Rounded corners are approximated with rectangles; those omissions are counted where applicable. There is no silent replacement of the Rust widget tree with JavaScript widgets.
+The bridge uses `VisualLayerPlan::replay_into` and Imaging's retained `Scene`. It replays **ordered semantic commands** via typed scalar WASM exports: solid-color Rect/RoundedRect/BezPath fills and strokes, undashed cap/join/miter attributes, nested nonzero `PushClip/PopClip` scopes, and full six-coefficient affine transforms. Canvas2D reproduces the tested shapes from Rust data, including real rounded corners and rotated open paths. `PathEl` segments are bounded to 512 per shape. Unsupported group compositing, image/gradient brushes, glyphs, complex stroked clips and mismatched open-path caps trigger explicit `mp_skipped_draws`, never an unmarked approximation.
 
 It is **not production-ready Masonry Web**. Real clipboard/IME, keyboard, screen-reader DOM/AccessKit projection, high-DPI, generalized graphics, resource scheduling and error/capability fallback are separate acceptance gates. The browser's semantic HTML remains authoritative for SEO.
 
@@ -39,13 +39,13 @@ The browser uses the generated ES module; the Node test supplies the generated W
 - Masonry `Geometry::RoundedRect` now preserves *per-corner* radii (clockwise top-left, top-right, bottom-right, bottom-left) through the Rust numeric ABI.
 - The host exports both the legacy world-space bounding box and the exact local rectangle, plus all six `kurbo::Affine` coefficients. Canvas2D applies `setTransform` followed by `roundRect`, instead of flattening rotated/skewed coordinates to a bounding box.
 - Rust native test checks that real rounded widget geometry reaches the scene; Node verifies corner-radius values and affine exports; Chromium/Firefox sample a real filled pixel and an unfilled rounded-corner pixel. Missing shape data fails these gates.
-- Does **not** yet support arbitrary paths, stroke, clip stacks, image resources or gradient brushes; their loss must not be mistaken for faithful rendering.
+- R3 supports bounded BezPath segments, solid Stroke and nested Clip. Arbitrary combinations of paths/groups, image resources and gradients still require separate conformance tests.
 
 ## R2 ordered paint-stream fidelity: border stroke and viewport clip
 
-The independent demo now creates a real upstream `BorderColor` / `BorderWidth` stroke and a `Portal` that clips a 120px green child to an 80px viewport. The Rust bridge iterates **the original painter command order** and retains `Draw::Fill`, `Draw::Stroke`, `PushClip`, and `PopClip` operations. The browser Canvas2D adapter replays them in exact order with `save` / `clip` / `restore`, preserving affine matrices and per-corner radii. Solid rectangle/rounded-rectangle strokes are supported only for finite undashed miter/butt styles; other strokes are explicitly counted unsupported.
+The independent demo now creates a real upstream `BorderColor` / `BorderWidth` stroke and a `Portal` that clips a 120px green child to an 80px viewport. The Rust bridge iterates **the original painter command order** and retains `Draw::Fill`, `Draw::Stroke`, `PushClip`, and `PopClip` operations. The browser Canvas2D adapter replays them in exact order with `save` / `clip` / `restore`, preserving affine matrices and per-corner radii. Solid undashed strokes support Miter/Round/Bevel joins, miter limit and applicable cap style; dashed and unsupported compound styles are counted unsupported.
 
-**Failure policy:** unsupported path/brush/groups/stroked clips are *not drawn as un-clipped approximations*. They increment `mp_skipped_draws`; the R2 browser E2E requires zero skipped draws for its test scene. This is not yet generalized SVG path/gradient/text/glyph compositing or production clipping.
+**Failure policy:** unsupported brush/groups/stroked clips are *not drawn as un-clipped approximations*. They increment `mp_skipped_draws`; the R2 browser E2E requires zero skipped draws for its test scene. This is not yet generalized SVG path/gradient/text/glyph compositing or production clipping.
 
 Tests: native Rust checks stroke and clip ops exist; Node confirms real `Draw::Stroke` color/width, clip push/draw/pop ordering, clipped viewport width, and zero skipped draws; Chromium and Firefox inspect red border pixels, green pixels inside a portal and absent pixels outside the clip, and previous button/resize behaviors.
 
@@ -56,7 +56,7 @@ scrollbar's `Stroke::new(edge_width)` using `Join::Round` (not a missing
 `PushClip` or `PopClip`). The R2 scene ABI now exports the join mode
 (0=Miter,1=Round,2=Bevel) and miter limit. Canvas2D maps them to native
 `lineJoin` and `miterLimit`; the demo still rejects dashed strokes
-and non-rectangular geometry. Rust/Node/Chromium/Firefox tests assert the
+and untested groups or complex clip semantics. Rust/Node/Chromium/Firefox tests assert the
 round-join scrollbar outline survives alongside the red miter border,
 and that unsupported operation count remains zero.
 
@@ -67,4 +67,10 @@ and that unsupported operation count remains zero.
 - The green child is now wrapped by **two** genuine `Portal` instances, with 65px and 80px viewports. Tests require nesting depth >=2 at the green fill, balanced push/pop commands and zero skipped draws.
 - Open path strokes export a round/butt/square line-cap style in addition to the existing join and miter limit. Unsupported differing start/end caps and dashed paths remain fail-closed.
 - Node and both browser E2Es check the real Path payload and its nonzero rotation. Chromium/Firefox additionally inspect actual magenta pixels along a computed transformed path segment.
-- No claim of SVG-level completeness: advanced composite groups, filled glyphs, image resources, gradient paints, arbitrary stroked clip regions, full DPI/IME/a11y and CSS layout remain out of scope. R3 becomes Verified only on native + real WASM + Node + Chromium/Firefox PASS.
+- No claim of SVG-level completeness: advanced composite groups, filled glyphs, image resources, gradient paints, arbitrary stroked clip regions, full DPI/IME/a11y and CSS layout remain out of scope. R3 has passed those tests on [CI #40201480153](https://github.com/Lalalalendia/FrontRust/actions/runs/40201480153), including a real rotated open-line path; QuadTo and CurveTo require dedicated regression pixels before claiming full curve fidelity.
+
+## Current gate and next steps
+
+- [R3: native Rust + WASM release + wasm-bindgen + Node + Chromium/Firefox SUCCESS](https://github.com/Lalalalendia/FrontRust/actions/runs/40201480153). Artifact `masonry-browser-evidence` contains both browser screenshots and `masonry-real-wasm` the compiled binary.
+- [PR #1 remains Draft](https://github.com/Lalalalendia/FrontRust/pull/1); no assumption of production readiness or a completed merge.
+- R3b: exercise synthetic or widget-generated QuadTo/CurveTo with precise pixel conformance and negative fail-closed cases. R4: focus ownership, browser keyboard dispatch, IME composition and AccessKit→DOM accessibility projection.
