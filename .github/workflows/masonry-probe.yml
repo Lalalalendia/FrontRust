@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        probe: [core, widgets, native-host]
+        probe: [core, widgets, headless-native, native-host]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -37,6 +37,7 @@ jobs:
           case "$PROBE" in
             core) cargo check --target wasm32-unknown-unknown --manifest-path experiments/masonry-wasm-probe/Cargo.toml ;;
             widgets) cargo check --target wasm32-unknown-unknown --features widgets --manifest-path experiments/masonry-wasm-probe/Cargo.toml ;;
+            headless-native) cargo test --features widgets --manifest-path experiments/masonry-wasm-probe/Cargo.toml ;;
             native-host) cargo check --target wasm32-unknown-unknown --features native-host --manifest-path experiments/masonry-wasm-probe/Cargo.toml ;;
             *) exit 2 ;;
           esac 2>&1 | tee "masonry-$PROBE.log"

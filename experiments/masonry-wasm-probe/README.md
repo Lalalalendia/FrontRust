@@ -15,3 +15,7 @@ The CI matrix captures actual output for all three. A native-host failure does n
 These checks prove only dependency/type availability on wasm32. They do NOT prove a live widget tree, `RenderRoot` event dispatch, browser host, scene rendering, IME, clipboard, or accessibility. Those are subsequent gates; the current Canvas2D + Rust/WASM product adapter remains separate.
 
 [Notion architecture](https://app.notion.com/p/40332a84beec81a6a577e2741c64b24a)
+
+## Native RenderRoot headless experiment
+
+The `headless-native` CI matrix member runs a real two-widget `Flex` tree of colored `SizedBox` nodes through `RenderRoot::new`, `redraw()`, `WindowEvent::Resize`, and a second scene redraw. This tests the real engine without a native window or system fonts. The same path also type-checks in the `widgets` wasm32 job, but it is **not yet executed inside a browser**.
