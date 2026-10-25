@@ -23,7 +23,7 @@ mod browser_host {
     use masonry::imaging::record::Clip;
     use masonry::dpi::{PhysicalPosition, PhysicalSize};
     use masonry::imaging::record::{Command, Draw, Geometry, Scene};
-    use masonry::kurbo::{Cap, Join, Point};
+    use masonry::kurbo::{Join, Point};
     use masonry::layout::{AsUnit, Length};
     use masonry::peniko::{Brush, Color, Fill};
     use masonry::properties::{Background, BorderColor, BorderWidth, CornerRadius, Dimensions};
@@ -226,9 +226,10 @@ mod browser_host {
                                 Draw::Stroke { shape, transform, brush: Brush::Solid(color), stroke, .. }
                                     if stroke.width.is_finite() && stroke.width > 0.0
                                         && stroke.dash_pattern.is_empty()
-                                        && stroke.join == Join::Miter
-                                        && stroke.start_cap == Cap::Butt
-                                        && stroke.end_cap == Cap::Butt =>
+                                        // Geometry::Rect/RoundedRect are closed shapes:
+                                        // Kurbo's default Round caps do not affect the
+                                        // stroke outline of a closed border.
+                                        && stroke.join == Join::Miter =>
                                     (2, shape, transform, *color, stroke.width),
                                 // Every other draw is explicitly counted as unsupported.
                                 _ => {
