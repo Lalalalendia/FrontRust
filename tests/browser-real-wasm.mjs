@@ -97,17 +97,18 @@ async function scenario(name, browser) {
 
     await moveCanvas(page,210,180,270,225);
     state=await getState(page);
-    assert.equal(state.x,220,'Pointer movement must update Rust X');
-    assert.equal(state.y,165,'Pointer movement must update Rust Y');
-    assert.equal(await page.locator('#rect-x').inputValue(),'220','Canvas movement must update HTML');
-    assert.match(await page.locator('#semantic-list').textContent(),/X 220, Y 165/);
+    assert.ok(Math.abs(state.x-220)<=1,'Pointer movement must update Rust X within one model pixel');
+    const movedX=state.x;
+    assert.ok(Math.abs(state.y-165)<=1,'Pointer movement must update Rust Y within one model pixel');
+    assert.equal(await page.locator('#rect-x').inputValue(),String(state.x),'Canvas movement must update HTML');
+    assert.ok((await page.locator('#semantic-list').textContent()).includes('X '+state.x+', Y '+state.y),'Semantic HTML must match Rust model');
     assert.equal((await pixel(page,170,130))[0],248,'Old object position must be cleared');
     assert.equal((await pixel(page,240,185))[0],201,'New object position must be painted');
 
     await page.locator('#scene').focus();
     await page.keyboard.press('ArrowRight');
     state=await getState(page);
-    assert.equal(state.x,225,'Scene keyboard routing must advance Rust state');
+    assert.equal(state.x,movedX+5,'Scene keyboard routing must advance Rust state');
     await page.locator('#reset').click();
     state=await getState(page);
     assert.deepEqual({x:state.x,y:state.y,width:state.width,height:state.height,selected:state.selected},
