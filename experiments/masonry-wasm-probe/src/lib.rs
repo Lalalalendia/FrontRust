@@ -503,7 +503,10 @@ mod browser_host {
                     Flex::set_fixed_spacer(&mut root, 1, Length::const_px(50.0));
                 });
             } else {
-                let tag = self.button_tag;
+                // A removed tag may remain reserved within Masonry's widget
+                // registry. A new widget gets both a new WidgetTag and NodeId.
+                let tag: WidgetTag<Button> = WidgetTag::unique();
+                self.button_tag = tag;
                 let child = NewWidget::new(
                     SizedBox::empty().size(Length::const_px(120.0), Length::const_px(50.0))
                 ).with_props(
