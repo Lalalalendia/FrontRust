@@ -9,7 +9,11 @@ const e=await initWasm(bytes);
 const symbols=[
   'mp_version','mp_init','mp_resize','mp_pointer','mp_rect_count',
   'mp_rect_x','mp_rect_y','mp_rect_width','mp_rect_height','mp_rect_rgba',
-  'mp_layer_count','mp_access_nodes','mp_skipped_draws','mp_click_count','mp_width','mp_height'
+  'mp_layer_count','mp_access_nodes','mp_skipped_draws','mp_click_count','mp_width','mp_height',
+  'mp_rect_local_x','mp_rect_local_y','mp_rect_local_width','mp_rect_local_height',
+  'mp_rect_radius_tl','mp_rect_radius_tr','mp_rect_radius_br','mp_rect_radius_bl',
+  'mp_rect_matrix_a','mp_rect_matrix_b','mp_rect_matrix_c',
+  'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f'
 ];
 for(const s of symbols)assert.equal(typeof e[s],'function','missing exported '+s);
 assert.equal(e.mp_version(),1);
@@ -24,6 +28,15 @@ const encode=(r,g,b)=>((r|(g<<8)|(b<<16)|(255<<24))>>>0);
 const blue=encode(70,120,210),brown=encode(195,145,105);
 let rects=getRects();
 assert.ok(rects.some(r=>r.rgba===blue),'first painted surface from Masonry missing');
+const rounded=rects.findIndex(r=>r.rgba===blue);
+assert.ok(rounded>=0);
+assert.ok(e.mp_rect_radius_tl(rounded)>=10,'Masonry rounded corner must survive scene serialization');
+assert.ok(e.mp_rect_radius_br(rounded)>=10,'Masonry bottom-right radius missing');
+assert.ok(e.mp_rect_local_width(rounded)>0 && e.mp_rect_local_height(rounded)>0);
+assert.ok(Number.isFinite(e.mp_rect_matrix_a(rounded)) && Number.isFinite(e.mp_rect_matrix_f(rounded)));
+assert.ok([e.mp_rect_matrix_a(rounded),e.mp_rect_matrix_b(rounded),
+  e.mp_rect_matrix_c(rounded),e.mp_rect_matrix_d(rounded),
+  e.mp_rect_matrix_e(rounded),e.mp_rect_matrix_f(rounded)].every(Number.isFinite));
 const target=rects.find(r=>r.rgba===brown);
 assert.ok(target,'button child surface from Masonry missing');
 assert.ok(target.width>0&&target.height>0,'button surface has no layout');

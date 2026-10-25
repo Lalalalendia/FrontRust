@@ -28,11 +28,20 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     const blue=first.rects.find(r=>(r.rgba&255)===70&&((r.rgba>>>8)&255)===120);
     const brown=first.rects.find(r=>(r.rgba&255)===195&&((r.rgba>>>8)&255)===145);
     assert.ok(blue&&brown,'Both colored rectangles must come from actual Masonry paint scene');
+    assert.ok(blue.radii[0]>=10&&blue.radii[2]>=10,'Real Masonry rounded corners must reach the browser');
+    assert.ok(blue.matrix.every(Number.isFinite),'Real Kurbo affine matrix must reach the browser');
     const rgba=await page.evaluate(({x,y})=>Array.from(
       document.getElementById('masonry-canvas').getContext('2d')
         .getImageData(Math.floor(x),Math.floor(y),1,1).data
     ),{x:blue.x+blue.width/2,y:blue.y+blue.height/2});
     assert.ok(matchPixel(rgba,expected),'Canvas must render Masonry scene color, got '+JSON.stringify(rgba));
+    // Pixel near the top-left corner is OUTSIDE a true rounded fill, but
+    // WOULD be colored by the former rectangular bounding-box approximation.
+    const corner=await page.evaluate(({x,y})=>Array.from(
+      document.getElementById('masonry-canvas').getContext('2d')
+        .getImageData(Math.floor(x),Math.floor(y),1,1).data
+    ),{x:blue.x+1,y:blue.y+1});
+    assert.ok(!matchPixel(corner,expected),'Rounded corner was flattened to a rectangular fill');
     const canvas=page.locator('#masonry-canvas');
     const box=await canvas.boundingBox();
     assert.ok(box);

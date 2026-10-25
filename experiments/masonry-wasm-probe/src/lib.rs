@@ -23,9 +23,9 @@ mod browser_host {
     use masonry::dpi::{PhysicalPosition, PhysicalSize};
     use masonry::imaging::record::{Command, Draw, Geometry, Scene};
     use masonry::kurbo::Point;
-    use masonry::layout::Length;
+    use masonry::layout::{AsUnit, Length};
     use masonry::peniko::{Brush, Color};
-    use masonry::properties::Background;
+    use masonry::properties::{Background, CornerRadius};
     use masonry::theme::default_property_set;
     use masonry::ui_events::keyboard::Modifiers;
     use masonry::ui_events::pointer::{
@@ -45,6 +45,12 @@ mod browser_host {
         pub height: f64,
         /// RGBA8, little-endian packed (R in the lowest byte).
         pub rgba: u32,
+        /// Local-space bounds preserve arbitrary Affine rotation/skew/scale.
+        pub local: [f64; 4],
+        /// Canvas2D (a,b,c,d,e,f) matrix from kurbo::Affine.
+        pub matrix: [f64; 6],
+        /// Clockwise (tl,tr,br,bl), local pixels; all zero means Rect.
+        pub radii: [f64; 4],
     }
 
     pub struct BrowserHost {
@@ -59,10 +65,14 @@ mod browser_host {
     impl BrowserHost {
         pub fn new(width: u32, height: u32) -> Self {
             let tile = |color: Color| {
+                let mut props = PropertySet::one(Background::Color(color));
+                // Force a REAL rounded geometry in Masonry, not a browser-only
+                // CSS/Canvas decoration: the transport must preserve its radii.
+                props.insert(CornerRadius::all(18.px()));
                 NewWidget::new(
                     SizedBox::empty().size(Length::const_px(120.0), Length::const_px(50.0)),
                 )
-                .with_props(PropertySet::one(Background::Color(color)))
+                .with_props(props)
             };
             // Both colored child surfaces are actual Masonry widgets.
             // The second is inside an actual Button and sends ButtonPress actions.
@@ -121,25 +131,44 @@ mod browser_host {
                         self.skipped_draws += 1;
                         continue;
                     };
-                let rect = match shape {
-                    Geometry::Rect(rect) => *rect,
-                    Geometry::RoundedRect(rect) => rect.rect(),
+                let (rect, radii) = match shape {
+                    Geometry::Rect(rect) => (*rect, [0.0; 4]),
+                    Geometry::RoundedRect(round) => {
+                        let radii = round.radii();
+                        (round.rect(), [
+                            radii.top_left, radii.top_right,
+                            radii.bottom_right, radii.bottom_left,
+                        ])
+                    },
                     Geometry::Path(_) => {
                         self.skipped_draws += 1;
                         continue;
                     }
                 };
-                let a = *transform * Point::new(rect.x0, rect.y0);
-                let b = *transform * Point::new(rect.x1, rect.y1);
-                if !a.x.is_finite() || !a.y.is_finite() || !b.x.is_finite() || !b.y.is_finite() {
+                let matrix = transform.as_coeffs();
+                // Existing x/y/width/height getters retain the WINDOW-SPACE
+                // bounding-box contract consumed by the original E2E test.
+                // Extra getters expose exact untransformed geometry to Canvas.
+                let corners = [
+                    *transform * Point::new(rect.x0, rect.y0),
+                    *transform * Point::new(rect.x1, rect.y0),
+                    *transform * Point::new(rect.x1, rect.y1),
+                    *transform * Point::new(rect.x0, rect.y1),
+                ];
+                let x = corners.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+                let y = corners.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+                let far_x = corners.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+                let far_y = corners.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+                if ![x, y, far_x, far_y, rect.x0, rect.y0, rect.width(), rect.height()]
+                    .iter().chain(matrix.iter()).chain(radii.iter()).all(|n| n.is_finite())
+                {
                     self.skipped_draws += 1;
                     continue;
                 }
                 self.rects.push(SolidRect {
-                    x: a.x.min(b.x),
-                    y: a.y.min(b.y),
-                    width: (b.x-a.x).abs(),
-                    height: (b.y-a.y).abs(),
+                    x, y, width: far_x - x, height: far_y - y,
+                    local: [rect.x0, rect.y0, rect.width(), rect.height()],
+                    matrix, radii,
                     rgba: (*color).to_rgba8().to_u32(),
                 });
             }
@@ -294,6 +323,112 @@ mod browser_host {
             .map(|r| r.rgba).unwrap_or(0))
     }
 
+    // This is a scalar-only ABI experiment; no raw pointers or shared memory.
+    // WASM / Canvas uses these values instead of prematurely rasterizing
+    // rotated or rounded geometry into axis-aligned rectangles.
+    fn get_rect_f64(i: i32, getter: impl FnOnce(&SolidRect) -> f64) -> f64 {
+        get_f64(|h| h.rects.get(i.max(0) as usize).map(getter).unwrap_or(f64::NAN))
+    }
+
+    // ABI-exported numeric shape/matrix members (clamped index in accessor).
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_local_x(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.local[0])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_local_y(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.local[1])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_local_width(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.local[2])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_local_height(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.local[3])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_radius_tl(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.radii[0])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_radius_tr(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.radii[1])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_radius_br(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.radii[2])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_radius_bl(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.radii[3])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_matrix_a(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.matrix[0])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_matrix_b(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.matrix[1])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_matrix_c(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.matrix[2])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_matrix_d(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.matrix[3])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_matrix_e(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.matrix[4])
+    }
+
+    // SAFETY: no_mangle is confined to this scalar-only ABI symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_matrix_f(i: i32) -> f64 {
+        get_rect_f64(i, |r| r.matrix[5])
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -304,7 +439,8 @@ mod browser_host {
             assert!(h.scene_layers > 0);
             assert!(h.rects.len() >= 2);
             assert!(h.accessibility_nodes > 0);
-            assert!(h.rects.iter().any(|r| r.rgba == Color::from_rgb8(70,120,210).to_rgba8().to_u32()));
+            assert!(h.rects.iter().any(|r| r.rgba == Color::from_rgb8(70,120,210).to_rgba8().to_u32() && r.radii[0] >= 10.0));
+            assert!(h.rects.iter().all(|r| r.matrix.iter().all(|n| n.is_finite())));
             assert!(h.rects.iter().any(|r| r.rgba == Color::from_rgb8(195,145,105).to_rgba8().to_u32()));
             assert!(h.resize(400, 300) >= 2);
             assert_eq!(h.size(), (400,300));

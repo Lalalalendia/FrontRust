@@ -9,7 +9,11 @@ const required=[
   'mp_version','mp_init','mp_resize','mp_pointer','mp_rect_count','mp_rect_x',
   'mp_rect_y','mp_rect_width','mp_rect_height','mp_rect_rgba',
   'mp_layer_count','mp_access_nodes','mp_skipped_draws',
-  'mp_click_count','mp_width','mp_height'
+  'mp_click_count','mp_width','mp_height',
+  'mp_rect_local_x','mp_rect_local_y','mp_rect_local_width','mp_rect_local_height',
+  'mp_rect_radius_tl','mp_rect_radius_tr','mp_rect_radius_br','mp_rect_radius_bl',
+  'mp_rect_matrix_a','mp_rect_matrix_b','mp_rect_matrix_c',
+  'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f'
 ];
 
 function sceneRects(){
@@ -18,7 +22,13 @@ function sceneRects(){
   return Array.from({length:count},(_,i)=>({
     x:engine.mp_rect_x(i),y:engine.mp_rect_y(i),
     width:engine.mp_rect_width(i),height:engine.mp_rect_height(i),
-    rgba:engine.mp_rect_rgba(i)>>>0
+    rgba:engine.mp_rect_rgba(i)>>>0,
+    local:[engine.mp_rect_local_x(i),engine.mp_rect_local_y(i),
+      engine.mp_rect_local_width(i),engine.mp_rect_local_height(i)],
+    radii:[engine.mp_rect_radius_tl(i),engine.mp_rect_radius_tr(i),
+      engine.mp_rect_radius_br(i),engine.mp_rect_radius_bl(i)],
+    matrix:[engine.mp_rect_matrix_a(i),engine.mp_rect_matrix_b(i),engine.mp_rect_matrix_c(i),
+      engine.mp_rect_matrix_d(i),engine.mp_rect_matrix_e(i),engine.mp_rect_matrix_f(i)]
   }));
 }
 function snapshot(){
@@ -37,8 +47,16 @@ function paint(){
   for(const r of scene.rects){
     if(![r.x,r.y,r.width,r.height].every(Number.isFinite))throw Error('Nonfinite Masonry draw');
     const red=r.rgba&255,green=(r.rgba>>>8)&255,blue=(r.rgba>>>16)&255,alpha=(r.rgba>>>24)&255;
+    if(![...r.local,...r.radii,...r.matrix].every(Number.isFinite))throw Error('Nonfinite Masonry local geometry');
+    ctx.save();
+    // Preserve the FULL Kurbo affine matrix, including rotation and skew.
+    ctx.setTransform(...r.matrix);
     ctx.fillStyle='rgba('+red+','+green+','+blue+','+(alpha/255)+')';
-    ctx.fillRect(r.x,r.y,r.width,r.height);
+    ctx.beginPath();
+    if(r.radii.some(v=>v>0))ctx.roundRect(...r.local,r.radii);
+    else ctx.rect(...r.local);
+    ctx.fill();
+    ctx.restore();
   }
   el('layers').textContent=String(scene.layers);
   el('rectangles').textContent=String(scene.rects.length);
