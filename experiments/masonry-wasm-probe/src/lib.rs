@@ -143,6 +143,7 @@ mod browser_host {
         editor_tag: WidgetTag<TextArea<true>>,
         editor_committed: String,
         editor_composing: bool,
+        editor_preedit: String,
         editor_commits: i32,
         editor_actions: Rc<Cell<i32>>,
         rects: Vec<SolidRect>,
@@ -293,7 +294,8 @@ mod browser_host {
             let _ = text_root.redraw();
             let mut host = Self {
                 root, text_root, editor_tag, editor_committed: String::new(),
-                editor_composing: false, editor_commits: 0, editor_actions,
+                editor_composing: false, editor_preedit: String::new(),
+                editor_commits: 0, editor_actions,
                 rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
                 accessibility_nodes: 0, accessible_button: false,
                 access_button_id: None, access_button_disabled: false, access_focus_id: 0,
@@ -598,13 +600,21 @@ mod browser_host {
             self.clicks.get()
         }
 
-        // R4d: the actual upstream Masonry TextArea is the text authority.
-        // `TextAction::Changed` also occurs on preedit; only these explicit
-        // accepted commit/replace paths advance the durable text projection.
-        pub fn editor_live_text(&self) -> String {
+        // PlainEditor::text() deliberately EXCLUDES IME preedit. This is
+        // the genuine committed document model from the upstream TextArea.
+        pub fn editor_document_text(&self) -> String {
             self.text_root.get_widget_with_tag(self.editor_tag)
                 .map(|area| area.inner().text().to_string())
                 .unwrap_or_default()
+        }
+
+        // The bounded demo provides an append-only composition preview.
+        // This is NOT the canonical TextArea document and does not implement
+        // arbitrary selection or cursor-positioned preedit.
+        pub fn editor_live_text(&self) -> String {
+            let mut preview = self.editor_document_text();
+            if self.editor_composing { preview.push_str(&self.editor_preedit); }
+            preview
         }
 
         pub fn editor_focused(&self) -> i32 {
@@ -617,6 +627,7 @@ mod browser_host {
             if !focused && self.editor_composing {
                 self.text_root.handle_text_event(TextEvent::Ime(Ime::Disabled));
                 self.editor_composing = false;
+                self.editor_preedit.clear();
             }
             let id = if focused {
                 self.text_root.get_widget_with_tag(self.editor_tag).map(|area| area.id())
@@ -648,7 +659,7 @@ mod browser_host {
                 TextArea::reset_text(&mut area, text);
             });
             let _ = self.text_root.redraw();
-            self.editor_committed = self.editor_live_text();
+            self.editor_committed = self.editor_document_text();
             1
         }
 
@@ -659,6 +670,7 @@ mod browser_host {
                 Ime::Preedit(text.to_owned(), None)
             ));
             self.editor_composing = true;
+            self.editor_preedit = text.to_owned();
             let _ = self.text_root.redraw();
             1
         }
@@ -670,6 +682,7 @@ mod browser_host {
             self.text_root.handle_text_event(TextEvent::Ime(
                 Ime::Preedit(text.to_owned(), None)
             ));
+            self.editor_preedit = text.to_owned();
             let _ = self.text_root.redraw();
             1
         }
@@ -681,8 +694,9 @@ mod browser_host {
                 Ime::Commit(text.to_owned())
             ));
             self.editor_composing = false;
+            self.editor_preedit.clear();
             let _ = self.text_root.redraw();
-            self.editor_committed = self.editor_live_text();
+            self.editor_committed = self.editor_document_text();
             self.editor_commits = self.editor_commits.saturating_add(1);
             1
         }
@@ -692,6 +706,7 @@ mod browser_host {
             self.text_root.handle_text_event(TextEvent::Ime(Ime::Disabled));
             self.text_root.handle_text_event(TextEvent::Ime(Ime::Enabled));
             self.editor_composing = false;
+            self.editor_preedit.clear();
             let _ = self.text_root.redraw();
             1
         }
@@ -1175,11 +1190,16 @@ mod browser_host {
             assert_eq!(h.editor_live_text(), "Привет ");
             let clicks = h.clicks.get();
             let commits = h.editor_commits;
+            let actions = h.editor_actions.get();
             assert_eq!(h.editor_preedit("に"), 1);
+            assert!(h.editor_actions.get() > actions,
+                "preedit must reach the actual Masonry TextArea event handler");
+            assert_eq!(h.editor_document_text(), "Привет ",
+                "upstream PlainEditor must exclude preedit from its source text");
             assert_eq!(h.editor_committed, "Привет ",
                 "IME preedit MUST NOT become committed document text");
             assert_ne!(h.editor_live_text(), h.editor_committed,
-                "genuine Masonry TextArea must hold a visible preedit");
+                "append-only IME preview must remain separate from document text");
             assert_eq!(h.editor_update_preedit("日本"), 1);
             assert_eq!(h.editor_committed, "Привет ");
             assert_eq!(h.editor_replace("wrong"), -3,
