@@ -137,9 +137,11 @@ function syncAccessProjection(scene){
   }else{
     if(!semanticAction.isConnected)actionAnchor.after(semanticAction);
     semanticAction.dataset.accesskitId=scene.accessButtonId;
+    const hadSceneFocus=document.activeElement===semanticAction;
     semanticAction.disabled=scene.accessButtonDisabled!==0;
-    if(document.activeElement===semanticAction
-      &&(semanticAction.disabled||scene.focusedButton!==1))
+    // Chromium may automatically blur an element as soon as disabled=true.
+    // Capture focus beforehand or it would be lost to the document body.
+    if(hadSceneFocus&&(semanticAction.disabled||scene.focusedButton!==1))
       inspector.focus({preventScroll:true});
   }
   el('toggle-disabled').textContent=scene.accessButtonDisabled===1
