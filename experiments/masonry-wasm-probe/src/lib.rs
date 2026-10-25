@@ -702,7 +702,13 @@ mod browser_host {
             self.text_root.handle_text_event(TextEvent::ClipboardPaste(inserted.to_owned()));
             let _ = self.text_root.redraw();
             let actual = self.editor_document_text();
-            if actual != expected { return -5; }
+            if actual != expected {
+                // Record the real Rust TextArea result in CI: -5 on its own
+                // hides whether a stale selection or an unhandled paste failed.
+                #[cfg(not(target_arch = "wasm32"))]
+                eprintln!("R4e TextArea splice mismatch: before={before:?}, range=({start},{end}), inserted={inserted:?}, expected={expected:?}, actual={actual:?}");
+                return -5;
+            }
             if expected != before && self.editor_actions.get() <= before_actions {
                 return -6; // Never silently accept a bypass of Masonry TextAction.
             }
