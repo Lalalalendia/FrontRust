@@ -8,9 +8,9 @@ permissions:
   contents: read
 jobs:
   rust-wasm:
-    name: Native unit tests + real WASM ABI + SSR smoke
+    name: Native tests, real WASM ABI, SSR and Chromium/Firefox E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -47,10 +47,33 @@ jobs:
           curl -fsS -D /tmp/frontrust.headers -o /tmp/frontrust.wasm http://127.0.0.1:8787/assets/ui_wasm.wasm
           grep -qi 'Content-Type: application/wasm' /tmp/frontrust.headers
           cmp /tmp/frontrust.wasm dist/ui_wasm.wasm
+      - name: Install pinned Playwright and browsers
+        run: |
+          npm install --no-save --no-audit --no-fund playwright@1.56.1
+          npx playwright install --with-deps chromium firefox
+      - name: Real WASM Chromium and Firefox E2E (no JS mock)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./target/debug/rui-server > /tmp/frontrust-browser-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          node tests/browser-real-wasm.mjs
+      - name: Print server diagnostics on failure
+        if: failure()
+        run: cat /tmp/frontrust-browser-server.log || true
       - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-real-wasm-evidence
+          path: test-results/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: frontrust-wasm
           path: target/wasm32-unknown-unknown/release/rui_wasm.wasm
+          if-no-files-found: ignore
   js:
     name: Browser adapter syntax + mock contract (not WASM)
     runs-on: ubuntu-latest

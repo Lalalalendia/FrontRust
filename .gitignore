@@ -1,4 +1,6 @@
 /target/
 /dist/*.wasm
+/node_modules/
+/test-results/
 *.log
 __pycache__/
