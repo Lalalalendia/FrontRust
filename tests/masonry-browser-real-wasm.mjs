@@ -229,6 +229,9 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.equal(afterInspector.keyboardEvents,fenced.keyboardEvents);
     assert.equal(afterInspector.clicks,3);
     assert.equal(afterInspector.owner,'inspector');
+    // Native editor Undo may change its text; what matters is that subsequent
+    // scene focus/composition must not edit the inspector behind the user's back.
+    const inspectorValueAfterLocalUndo=await inspector.inputValue();
     // Simulated composition verifies the explicit browser composition fence;
     // this is NOT proof of OS-level RU/JP IME correctness.
     await inspector.evaluate(el=>el.dispatchEvent(new CompositionEvent('compositionstart',{
@@ -251,7 +254,8 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     await page.waitForFunction(()=>window.__masonryProbe.snapshot().clicks===4);
     await inspector.focus();
     assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().focusedButton),0);
-    assert.equal(await inspector.inputValue(),'editor text','Scene keyboard routing mutated inspector text');
+    assert.equal(await inspector.inputValue(),inspectorValueAfterLocalUndo,
+      'Scene keyboard routing mutated inspector text after editor-local Undo');
     await page.locator('#resize').click();
     await page.waitForFunction(()=>window.__masonryProbe.snapshot().width===400,{timeout:10000});
     const resized=await page.evaluate(()=>window.__masonryProbe.snapshot());
