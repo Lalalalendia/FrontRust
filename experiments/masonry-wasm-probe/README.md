@@ -92,3 +92,12 @@ This remains a narrowly verified scene subset, not guaranteed SVG, CSS or publis
 - An explicit browser `compositionstart/compositionend` fence protects scene activation even if focus changes mid-composition or `KeyboardEvent.isComposing` is inconsistent. Native IME insertion stays in a real HTML text input; it is NOT an upstream Masonry text widget.
 - Native Rust and Node assert focus gates and real Enter/Space `ButtonPress` through WASM. Chromium/Firefox must prove mouse, Enter, Space, Tab to inspector, local Delete/Enter/Undo, and composition fencing without incrementing Rust key/event counters.
 - R4a does NOT certify OS-level Japanese/Russian IME, screen-reader/WCAG, dynamic AccessKit→DOM mapping, modal ownership, roving object tree or shortcut mapping. Those are separate R4b/R4c gates.
+
+
+## R4b — AccessKit Button/Click gate and DOM activation (experimental)
+
+- Before exposing the tagged Rust button as a DOM control, verify that its **matching WidgetId / AccessKit NodeId** has role `Button` and supports `Action::Click`. An arbitrary nonempty AccessKit update is not enough.
+- Treat `TreeUpdate.nodes` as a **delta**, not the complete tree on every redraw; preserve the confirmed node state when an update omits unchanged nodes.
+- Route native DOM pointer clicks and `detail=0` accessibility-style activations into actual Masonry `TextEvent`/`ButtonPress`. Suppress duplicate browser default clicks from Enter/Space without suppressing standalone accessibility actions.
+- Chromium/Firefox gate: pointer, Enter/Space, Tab and composition fences still pass; a `detail=0` click increments Rust state exactly once. A programmatic `click()` is **not** a screen-reader test.
+- Still out of scope: complete AccessKit tree synchronization, accessible-name derivation from Rust, disabled/expanded state, subtree removal, real OS IME and screen-reader interaction. The DOM name remains a demo-host-provided label.

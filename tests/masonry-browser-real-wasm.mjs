@@ -256,6 +256,24 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().focusedButton),0);
     assert.equal(await inspector.inputValue(),inspectorValueAfterLocalUndo,
       'Scene keyboard routing mutated inspector text after editor-local Undo');
+    // R4b: AccessKit role/action-gated DOM button must also accept detail=0
+    // (assistive-technology-style) click; Enter's own native default must
+    // not produce a duplicate Rust ButtonPress.
+    const beforeA11y=await page.evaluate(()=>window.__masonryProbe.snapshot().clicks);
+    await semantic.evaluate(el=>el.click());
+    await page.waitForFunction(expected=>
+      window.__masonryProbe.snapshot().clicks===expected,beforeA11y+1);
+    assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().focusedButton),1);
+    await semantic.click();
+    await page.waitForFunction(expected=>
+      window.__masonryProbe.snapshot().clicks===expected,beforeA11y+2);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(expected=>
+      window.__masonryProbe.snapshot().clicks===expected,beforeA11y+3);
+    await page.waitForTimeout(100);
+    assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().clicks),beforeA11y+3,
+      'Native keyboard click duplicated the Rust TextEvent activation');
+    assert.equal(await inspector.inputValue(),inspectorValueAfterLocalUndo);
     await page.locator('#resize').click();
     await page.waitForFunction(()=>window.__masonryProbe.snapshot().width===400,{timeout:10000});
     const resized=await page.evaluate(()=>window.__masonryProbe.snapshot());
@@ -263,7 +281,7 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.ok(resized.rects.some(r=>(r.rgba&255)===70));
     assert.deepEqual(errors,[]);
     await page.screenshot({path:'test-results/masonry-'+name+'.png',fullPage:true});
-    console.log('PASS '+name+' R4a real Rust/Masonry Enter+Space, focus ownership and IME fence; R3b pixels intact');
+    console.log('PASS '+name+' R4b AccessKit Button/Click gate, detail=0 activation, no duplicate keyboard click; R4a/R3b preserved');
   }catch(error){
     await page.screenshot({path:'test-results/masonry-'+name+'-FAIL.png',fullPage:true}).catch(()=>{});
     console.error('FAIL '+name,error.stack,errors);throw error;

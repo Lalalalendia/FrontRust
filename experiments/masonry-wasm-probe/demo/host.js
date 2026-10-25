@@ -5,6 +5,7 @@ const el=id=>document.getElementById(id);
 const semanticAction=el('masonry-action');
 const inspector=el('masonry-inspector');
 let compositionActive=false;
+let suppressNativeKeyboardClick=false;
 let engine=null;
 let scheduled=false;
 let lastSnapshot=null;
@@ -48,6 +49,13 @@ function handleSceneKey(event){
   const code=event.key==='Enter'?1:2;
   if(engine.mp_keyboard_button(event.type==='keydown'?1:0,code)<0)
     throw Error('Rust refused focused Masonry key');
+  if(event.type==='keyup'){
+    // A browser may issue a default detail=0 click on key activation.
+    // Rust already handled key-up: suppress that duplicate, not external
+    // accessibility/assistive-tech click actions that have the same detail.
+    suppressNativeKeyboardClick=true;
+    queueMicrotask(()=>{suppressNativeKeyboardClick=false;});
+  }
   requestPaint();
 }
 function sceneRects(){
@@ -208,7 +216,8 @@ try{
   for(const name of required)if(typeof engine[name]!=='function')throw Error('Missing Masonry WASM ABI: '+name);
   if(engine.mp_version()!==1)throw Error('Unknown Masonry ABI revision');
   if(engine.mp_init(canvas.width,canvas.height)<2)throw Error('No real Masonry fills found');
-  if(engine.mp_semantic_button_id()!==1)throw Error('Unsupported semantic projection revision');
+  if(engine.mp_semantic_button_id()!==1)
+    throw Error('Tagged button missing matching AccessKit Button/Click node');
   semanticAction.dataset.semanticId=String(engine.mp_semantic_button_id());
   semanticAction.addEventListener('focus',()=>{
     if(engine.mp_focus_button(1)!==1)throw Error('Rust Button focus refused');
@@ -220,9 +229,15 @@ try{
   semanticAction.addEventListener('keydown',handleSceneKey);
   semanticAction.addEventListener('keyup',handleSceneKey);
   semanticAction.addEventListener('click',event=>{
-    if(event.detail===0||compositionActive)return; // keyboard handled by TextEvent, not synthetic click
-    if(engine.mp_focused_button()!==1)engine.mp_focus_button(1);
-    engine.mp_keyboard_button(1,1);engine.mp_keyboard_button(0,1);
+    if(compositionActive)return;
+    // detail=0 also occurs for assistive-technology activation. Ignoring it
+    // would leave a keyboard-addressable but non-operable DOM control.
+    if(event.detail===0&&suppressNativeKeyboardClick)return;
+    if(document.activeElement!==semanticAction)
+      semanticAction.focus({preventScroll:true});
+    if(engine.mp_focused_button()!==1)throw Error('DOM/Rust click focus mismatch');
+    if(engine.mp_keyboard_button(1,1)<0||engine.mp_keyboard_button(0,1)<0)
+      throw Error('Rust refused projected DOM activation');
     requestPaint();
   });
   inspector.addEventListener('focus',updateFocusLabels);

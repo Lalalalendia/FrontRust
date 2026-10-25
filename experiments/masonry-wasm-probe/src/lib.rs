@@ -18,6 +18,7 @@ pub fn masonry_native_host_type_size() -> usize {
 
 #[cfg(feature = "widgets")]
 mod browser_host {
+    use masonry::accesskit::{Action as AccessAction, NodeId as AccessNodeId, Role as AccessRole};
     use masonry::app::{RenderRoot, RenderRootOptions, RenderRootSignal, WindowSizePolicy};
     use masonry::core::{NewWidget, PropertySet, TextEvent, Widget, WidgetTag, WindowEvent};
     use masonry::imaging::record::Clip;
@@ -137,6 +138,7 @@ mod browser_host {
         ops: Vec<SceneOp>,
         scene_layers: i32,
         accessibility_nodes: i32,
+        accessible_button: bool,
         skipped_draws: i32,
         clicks: Rc<Cell<i32>>,
         curve_tag: WidgetTag<Canvas>,
@@ -247,7 +249,8 @@ mod browser_host {
             root.handle_window_event(WindowEvent::EnableAccessTree);
             let mut host = Self {
                 root, rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
-                accessibility_nodes: 0, skipped_draws: 0, clicks, curve_tag, button_tag,
+                accessibility_nodes: 0, accessible_button: false,
+                skipped_draws: 0, clicks, curve_tag, button_tag,
                 keyboard_events: 0,
             };
             host.redraw();
@@ -255,10 +258,22 @@ mod browser_host {
         }
 
         pub fn redraw(&mut self) {
+            // TreeUpdate is a delta: preserve the previous semantic state when
+            // subsequent frames omit unchanged nodes.
+            let button_node_id = self.root.get_widget_with_tag(self.button_tag)
+                .map(|widget| AccessNodeId::from(widget.id()));
             let (plan, access) = self.root.redraw();
             self.scene_layers = plan.layers.len() as i32;
             if let Some(tree) = access {
                 self.accessibility_nodes = tree.nodes.len() as i32;
+                if let Some(target_id) = button_node_id {
+                    for (node_id, node) in &tree.nodes {
+                        if *node_id == target_id {
+                            self.accessible_button = node.role() == AccessRole::Button
+                                && node.supports_action(AccessAction::Click);
+                        }
+                    }
+                }
             }
 
             // Exact painter order matters: a canvas drawing or clip can no longer
@@ -425,6 +440,17 @@ mod browser_host {
             self.clicks.get()
         }
 
+        // A semantic projection is offered only when the actual tagged
+        // AccessKit node declares Button plus Click. Do not infer it from
+        // the existence of a Rust widget or an arbitrary count of nodes.
+        pub fn semantic_button_id(&self) -> i32 {
+            if self.accessible_button && self.root.get_widget_with_tag(self.button_tag).is_some() {
+                1
+            } else {
+                -1
+            }
+        }
+
         // Focus only the actual tagged Masonry Button. The DOM mirror is
         // a semantic keyboard/accessibility projection, not a second action.
         pub fn focus_button(&mut self, should_focus: bool) -> i32 {
@@ -512,7 +538,7 @@ mod browser_host {
     // SAFETY: all ABI exports pass only scalar values and no pointers.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
-    pub extern "C" fn mp_semantic_button_id() -> i32 { 1 }
+    pub extern "C" fn mp_semantic_button_id() -> i32 { get_i32(|h| h.semantic_button_id()) }
 
     // SAFETY: scalar ABI.
     #[allow(unsafe_code)]
@@ -829,6 +855,8 @@ mod browser_host {
         fn real_masonry_focus_and_keyboard_ownership_gate() {
             let mut h = BrowserHost::new(320, 360);
             let start = h.clicks.get();
+            assert_eq!(h.semantic_button_id(), 1,
+                "the tagged Rust Button must have an AccessKit Button/Click node");
             assert_eq!(h.focused_button(), 0);
             assert_eq!(h.keyboard_button(false, 1), -1,
                 "Unfocused scene MUST NOT receive keyboard activation");
