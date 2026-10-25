@@ -1,6 +1,6 @@
-# Rust UI Platform — P0/P1 bounded prototype
+# FrontRust — universal Rust UI platform (experimental)
 
-A **product-independent**, dependency-free Rust workspace proving the architectural contract between a semantic SSR/DOM page, a Canvas renderer and one Rust/WASM state machine. This is a first vertical slice, **not Masonry in a browser**, not a production SEO stack and not a general UI framework.
+A **product-independent** Rust UI architecture with two independently tested browser paths: (1) semantic SSR/DOM and Canvas2D sharing the same Rust/WASM state, and (2) an **experimental real Masonry RenderRoot** running in WebAssembly with a deliberately limited Canvas2D scene bridge. Neither path is a production UI framework or production SEO stack.
 
 ## What is actually included
 
@@ -9,8 +9,9 @@ A **product-independent**, dependency-free Rust workspace proving the architectu
 - `rui-server`: local Rust SSR reference server with HTML metadata and semantic content; loopback only.
 - `web/app.js`: event/Canvas adapter. It owns only transient drag state, *not* document state.
 - `web/mock-engine.js`: preview/test fixture only. Not loaded by real Rust server.
-- `tests`: mock ABI contract + Chromium browser UI smoke test; **not** Rust/WASM behavioral parity.
-- `docs`: inventoried donor sources, dependency/ownership constraints and Masonry WASM proof gates.
+- `tests`: real WASM ABI, Chromium/Firefox E2E for DOM + Canvas, plus separate mock-fixture tests. E2E without the Rust binary is **not** treated as a pass.
+- `experiments/masonry-wasm-probe`: standalone pinned-upstream Xilem/Masonry Cargo workspace, real `RenderRoot`, two widgets, scene export, BrowserHost pointer/resize, generated `wasm-bindgen` glue, Canvas2D demo and real Chromium/Firefox E2E.
+- `docs`: inventoried donor sources, dependency/ownership constraints and remaining Masonry Web acceptance gates.
 
 ## Real Rust/WASM path (requires Rust toolchain)
 
@@ -47,11 +48,34 @@ cargo build --release -p rui-wasm --target wasm32-unknown-unknown
 node tests/wasm-abi.test.mjs # real WASM, not a JS mock
 ```
 
-GitHub Actions run in `Lalalalendia/FrontRust` on the feature branch and on pull requests. Check the actual CI status; JavaScript mock tests do not prove Rust/WASM behavior.
+GitHub Actions run in `Lalalalendia/FrontRust` on the feature branch and on pull requests. Refer to these concrete proven gates:
+
+- [SSR + DOM/Canvas + Rust/WASM Chrome/Firefox — PASS](https://github.com/Lalalalendia/FrontRust/actions/runs/40190033411)
+- [Real Masonry RenderRoot + wasm-bindgen + Node + Chromium/Firefox — PASS](https://github.com/Lalalalendia/FrontRust/actions/runs/40190033470)
+- [Masonry wasm32 compatibility matrix](https://github.com/Lalalalendia/FrontRust/actions/runs/40190033421) — Core/widgets PASS, native-host known compile error recorded as non-blocking
+
+## Real Masonry Web proof of concept
+
+The separate experiment has its own pinned Cargo workspace. Build and run the browser demonstrator with a supported Rust toolchain, Node 22, and matching `wasm-bindgen-cli`:
+
+```sh
+cargo test --features widgets --manifest-path experiments/masonry-wasm-probe/Cargo.toml
+cargo build --release --target wasm32-unknown-unknown --features widgets --manifest-path experiments/masonry-wasm-probe/Cargo.toml
+cargo install wasm-bindgen-cli --version 0.2.129 --locked
+wasm-bindgen --target web --out-name masonry_probe \\
+  --out-dir experiments/masonry-wasm-probe/demo/gen \\
+  experiments/masonry-wasm-probe/target/wasm32-unknown-unknown/release/frontrust_masonry_wasm_probe.wasm
+node tests/masonry-runtime-abi.mjs
+python3 -m http.server 8792 --bind 127.0.0.1 --directory experiments/masonry-wasm-probe/demo
+```
+
+Open `http://127.0.0.1:8792/`. The JavaScript/wasm files in `demo/gen` are generated, not committed. The `masonry_winit` native host cannot compile for WASM at the upstream pinned revision; this experimental BrowserHost does **not** use it. The browser-screenshot artifacts are on [CI run #40190033470](https://github.com/Lalalalendia/FrontRust/actions/runs/40190033470).
 
 ## Architecture and honest scope
 
-`Rust core -> wasm32 -> browser adapter -> DOM inspector + Canvas.` State, undo and revisions live in `rui-core`; an actual `Masonry` web backend would be a separate **experimental adapter** after compile/input/focus/IME gates.
+`Rust core -> wasm32 -> browser adapter -> DOM inspector + Canvas.` State, undo and revisions live in `rui-core`.
+
+The independent Masonry experiment adds `RenderRoot -> VisualLayerPlan -> retained Scene -> bounded solid-fill serialization -> Canvas2D`, plus BrowserHost `PointerEvent` and `WindowEvent::Resize`. Node and real browsers execute the same compiled WASM with generated JS imports. The **scope is intentionally limited to rect/rounded-rect solid fills, two widgets and pointer/resize**; it is not a general paint engine. Arbitrary paths, strokes, clips, gradients, text, images, keyboard, native IME, screen-reader projection, DPI and resource scheduling remain separate work.
 
 The SSR HTML contains real semantic text, canonical/OG metadata, JSON-LD and robots behavior. Local HTTP is intentionally `noindex`; a real deployment needs correct site authority, output escaping/schema validation, CSRF/session/auth, caching, framework-level controls and security review. Do not expose this demo server publicly.
 
