@@ -4,5 +4,6 @@
 /test-results/
 /experiments/masonry-wasm-probe/target/
 /experiments/masonry-wasm-probe/Cargo.lock
+/experiments/masonry-wasm-probe/demo/*.wasm
 *.log
 __pycache__/

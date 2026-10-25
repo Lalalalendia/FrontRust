@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>FrontRust · Masonry RenderRoot в WASM</title>
+  <style>
+    :root{color-scheme:dark;font-family:system-ui,sans-serif;background:#0c1425;color:#e6eeff}
+    *{box-sizing:border-box}body{margin:0;padding:24px}
+    main{max-width:980px;margin:auto}
+    .eyebrow{color:#9bb7f3;font-size:12px;letter-spacing:.12em}
+    h1{font-size:clamp(28px,5vw,44px);margin:10px 0}
+    p{line-height:1.6;color:#aebed7}
+    .layout{display:flex;flex-wrap:wrap;gap:25px;align-items:flex-start}
+    .surface{padding:14px;background:#101e33;border:1px solid #43577d;border-radius:14px}
+    canvas{display:block;background:#f8fbff;max-width:100%;cursor:pointer;touch-action:none}
+    .panel{flex:1;min-width:240px;padding:18px;background:#172843;border-radius:14px}
+    .label{font-size:12px;color:#97afd3}.value{font-size:19px;margin:4px 0 16px}
+    button{background:#3863bb;border:0;border-radius:9px;color:white;padding:10px 14px;cursor:pointer}
+    #status{color:#b7dbb6}.warn{color:#eac18c;font-size:12px}
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">FRONTRUST / EXPERIMENTAL RENDERER</div>
+  <h1>Masonry в браузере</h1>
+  <p>Два виджета, реальный <code>RenderRoot</code> и графические команды из Rust/WASM. Canvas2D выводит только сплошные прямоугольники и фоны; остальные примитивы пока не реализованы.</p>
+  <div class="layout">
+    <section class="surface" aria-label="Masonry Canvas2D">
+      <canvas id="masonry-canvas" width="320" height="240" tabindex="0" aria-label="Экспериментальный холст: второй коричневый блок является кнопкой"></canvas>
+    </section>
+    <section class="panel">
+      <div class="label">WASM engine</div><div class="value" id="status" role="status">Загрузка…</div>
+      <div class="label">Scene layers</div><div class="value" id="layers">—</div>
+      <div class="label">Painted rectangles</div><div class="value" id="rectangles">—</div>
+      <div class="label">AccessKit nodes</div><div class="value" id="access">—</div>
+      <div class="label">Rust ButtonPress count</div><div class="value" id="clicks">0</div>
+      <button type="button" id="resize">Проверить resize (400 × 300)</button>
+      <p class="warn">Экспериментальный subset renderer. Не является готовым Masonry Web, не реализует текст, общие path/clip/gradient или browser screen-reader bridge.</p>
+    </section>
+  </div>
+</main>
+<script type="module" src="./host.js"></script>
+</body>
+</html>

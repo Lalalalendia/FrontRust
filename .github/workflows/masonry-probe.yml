@@ -26,6 +26,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - name: Install native fontconfig for headless probe
+        if: matrix.probe == 'headless-native'
+        run: sudo apt-get update -qq && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev pkg-config
       - name: Compile exact upstream revision
         id: compile
         continue-on-error: true

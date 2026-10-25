@@ -1,21 +1,21 @@
-# FrontRust — bounded Masonry WASM compatibility probe
+# FrontRust Masonry RenderRoot — browser runtime experiment
 
-Pinned upstream Xilem revision: `271a27a6d4a930f7878d404f9014e3c50a3a9b88`, matching Akula. This is a separate Cargo workspace and copies no Akula/Chaptera code.
+This experiment builds and runs **upstream Masonry 0.4 source pinned to Xilem revision 271a27a6d4a930f7878d404f9014e3c50a3a9b88**. It uses no product code from Akula or Chaptera.
 
-## Independent compile tests
+## Executable gates
 
-- Core: `cargo check --target wasm32-unknown-unknown --manifest-path experiments/masonry-wasm-probe/Cargo.toml`
-- Widgets: `cargo check --target wasm32-unknown-unknown --features widgets --manifest-path experiments/masonry-wasm-probe/Cargo.toml`
-- Native host: `cargo check --target wasm32-unknown-unknown --features native-host --manifest-path experiments/masonry-wasm-probe/Cargo.toml`
+1. Native Rust integration test creates two widgets (a plain colored `SizedBox` and a second colored `SizedBox` inside a real Masonry `Button`), initializes `RenderRoot` without a native window, enables AccessKit, obtains `VisualLayerPlan`, checks scene colors, and resizes.
+2. `wasm32-unknown-unknown` release `cdylib` is actually compiled. Node instantiates it and verifies scene colors, AccessKit nodes, pointer down/up `ButtonPress` and window resize.
+3. Chromium and Firefox load **that same WASM**, replay real Masonry scene layers into a minimal Canvas2D bridge, verify pixels are painted from Rust scene colors, click a Masonry Button and check Rust callback count, and resize the scene.
 
-The CI matrix captures actual output for all three. A native-host failure does not invalidate a successful Core/Widgets gate. See [linebender/xilem#1848](https://github.com/linebender/xilem/issues/1848) for a reported `masonry_winit` / `masonry_imaging::texture_render` gating error in another revision.
+Use `cargo test --features widgets --manifest-path experiments/masonry-wasm-probe/Cargo.toml` for the native test. The browser CI is at `.github/workflows/masonry-runtime.yml`. The test web app is `experiments/masonry-wasm-probe/demo/index.html`; an actual built `masonry_probe.wasm` must be present.
 
-## Not a browser renderer yet
+## Real but limited: transport contract
 
-These checks prove only dependency/type availability on wasm32. They do NOT prove a live widget tree, `RenderRoot` event dispatch, browser host, scene rendering, IME, clipboard, or accessibility. Those are subsequent gates; the current Canvas2D + Rust/WASM product adapter remains separate.
+The bridge uses `VisualLayerPlan::replay_into` and Imaging's retained `Scene`. It transports **only solid Rect/RoundedRect fills** via typed numeric WASM exports. It deliberately does not support every Drawing primitive, transform, clip or layer effect, text, gradient, stroke, image or OffscreenCanvas. Rounded corners are approximated with rectangles; those omissions are counted where applicable. There is no silent replacement of the Rust widget tree with JavaScript widgets.
 
-[Notion architecture](https://app.notion.com/p/40332a84beec81a6a577e2741c64b24a)
+It is **not production-ready Masonry Web**. Real clipboard/IME, keyboard, screen-reader DOM/AccessKit projection, high-DPI, generalized graphics, resource scheduling and error/capability fallback are separate acceptance gates. The browser's semantic HTML remains authoritative for SEO.
 
-## Native RenderRoot headless experiment
+## Compatibility
 
-The `headless-native` CI matrix member runs a real two-widget `Flex` tree of colored `SizedBox` nodes through `RenderRoot::new`, `redraw()`, `WindowEvent::Resize`, and a second scene redraw. This tests the real engine without a native window or system fonts. The same path also type-checks in the `widgets` wasm32 job, but it is **not yet executed inside a browser**.
+The standard `masonry_core` and `masonry` crates compile under wasm32. The native `masonry_winit` driver does not compile on that target in the pinned revision (upstream [#1848](https://github.com/linebender/xilem/issues/1848) documents the `texture_render` issue). This experiment avoids `masonry_winit` entirely.

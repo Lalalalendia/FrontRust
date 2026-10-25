@@ -8,7 +8,7 @@ publish = false
 resolver = "2"
 
 [lib]
-crate-type = ["rlib"]
+crate-type = ["rlib", "cdylib"]
 
 [features]
 default = []
