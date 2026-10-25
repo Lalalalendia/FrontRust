@@ -178,6 +178,11 @@ mod browser_host {
             let mut clip_support: Vec<bool> = Vec::new();
             let mut unsupported_group_depth = 0usize;
             for command in flattened.commands() {
+                #[cfg(test)]
+                match command {
+                    Command::Draw(id) => eprintln!("R2 debug draw: {:?}", flattened.draw_op(*id)),
+                    other => eprintln!("R2 debug scene command: {:?}", other),
+                }
                 match command {
                     Command::PushContext(_) | Command::PopContext => {}
                     Command::PushGroup(_) => {
