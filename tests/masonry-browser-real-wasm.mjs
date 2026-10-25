@@ -38,7 +38,10 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.ok(box);
     await page.mouse.click(box.x+(brown.x+brown.width/2)*box.width/first.width,
       box.y+(brown.y+brown.height/2)*box.height/first.height);
+    // Rust action is synchronous; DOM is intentionally committed on requestAnimationFrame.
+    // Wait for BOTH layers to update instead of racing Firefox's next animation frame.
     await page.waitForFunction(()=>window.__masonryProbe.snapshot().clicks===1,{timeout:10000});
+    await page.waitForFunction(()=>document.querySelector('#clicks')?.textContent==='1',{timeout:10000});
     assert.equal(await page.locator('#clicks').textContent(),'1');
     await page.locator('#resize').click();
     await page.waitForFunction(()=>window.__masonryProbe.snapshot().width===400,{timeout:10000});
