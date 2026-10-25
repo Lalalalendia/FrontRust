@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 
-const {default:initWasm}=await import('../experiments/masonry-wasm-probe/demo/gen/masonry_probe.js');
+const wasmGlue=await import('../experiments/masonry-wasm-probe/demo/gen/masonry_probe.js');
+const {default:initWasm}=wasmGlue;
 const path=process.argv[2]||'experiments/masonry-wasm-probe/demo/gen/masonry_probe_bg.wasm';
 const bytes=await readFile(path);
 // Pass bytes directly: no fetch is required by wasm-bindgen in Node.
-const e=await initWasm(bytes);
+// Legacy C ABI is scalar, while UTF-8 Rust String functions need the
+// generated wasm-bindgen JS wrapper. Calling raw exports yields [ptr,len].
+const e={...await initWasm(bytes),...wasmGlue};
+assert.equal(typeof wasmGlue.mp_editor_committed_text,'function',
+  'generated wasm-bindgen UTF-8 String wrapper is required');
+assert.equal(e.mp_editor_committed_text,wasmGlue.mp_editor_committed_text);
 const symbols=[
   'mp_version','mp_init','mp_resize','mp_pointer','mp_rect_count',
   'mp_rect_x','mp_rect_y','mp_rect_width','mp_rect_height','mp_rect_rgba',

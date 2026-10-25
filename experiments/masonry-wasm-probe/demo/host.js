@@ -1,4 +1,4 @@
-import initWasm from './gen/masonry_probe.js';
+import initWasm, * as wasmGlue from './gen/masonry_probe.js';
 const canvas=document.querySelector('#masonry-canvas');
 const ctx=canvas.getContext('2d',{alpha:false});
 const el=id=>document.getElementById(id);
@@ -281,7 +281,12 @@ function setButtonPresent(present){
 }
 try{
   // Transitive wasm-bindgen imports require the generated JS glue; never instantiate raw bytes.
-  engine=await initWasm();
+  // initWasm() returns raw Wasm exports for the old scalar ABI. The new
+  // UTF-8 String functions MUST use wasm-bindgen's generated JS wrappers;
+  // raw exports return pointer/length tuples rather than JS strings.
+  engine={...await initWasm(),...wasmGlue};
+  if(typeof wasmGlue.mp_editor_committed_text!=='function')
+    throw Error('Missing generated wasm-bindgen String wrapper');
   for(const name of required)if(typeof engine[name]!=='function')throw Error('Missing Masonry WASM ABI: '+name);
   if(engine.mp_version()!==1)throw Error('Unknown Masonry ABI revision');
   if(engine.mp_init(canvas.width,canvas.height)<2)throw Error('No real Masonry fills found');
