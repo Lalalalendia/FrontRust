@@ -124,3 +124,12 @@ This remains a narrowly verified scene subset, not guaranteed SVG, CSS or publis
 ### R4d JS glue correction (String ABI)
 
 The old `#[unsafe(no_mangle)]` scalar exports are callable directly on `WebAssembly.Exports`, but `#[wasm_bindgen]` functions accepting or returning `String` **must** be called through the generated `masonry_probe.js` named exports. `initWasm()` alone returns raw Wasm exports; a raw String result is a `[pointer, length]` pair, *not* a JavaScript string. The browser and Node adapters merge the generated wrappers for String signatures over the legacy scalar exports. Both adapters must enforce that the generated wrapper exists. The first R4d CI exposed this at the Node UTF-8 gate, so no R4d browser success may be claimed before a rerun.
+
+
+## R4e — Unicode-safe selection/splice (bounded, pending CI)
+
+- **New real TextArea path:** `TextArea::select_byte_range` sets the native Rust editor's UTF-8 byte-range selection. `TextEvent::ClipboardPaste` then replaces that selection, emitting a real `TextAction`. No full-value `reset_text` is used for normal browser `input` changes.
+- **Browser mapping:** native `HTMLInputElement.selectionStart/End` are UTF-16 code units. They are validated against surrogate-pair splits and encoded as UTF-8 byte offsets. `beforeinput` captures selected ranges when available; a Unicode-scalar prefix/suffix diff handles `fill`, Backspace/Delete and other unmatched input events. After mutation, the browser caret/selection is copied to the Rust TextArea.
+- **Fail-closed gates:** reject out-of-range, reversed or mid-UTF-8-scalar indices, edits while composing, unfocused edits, final text above 4096 bytes, missing Masonry `TextAction`, or mismatches between expected and actual Rust text. The real scene `ButtonPress` remains isolated.
+- **IME race fence:** `compositionstart` syncs the current Rust selection; preedit remains transient, and an `insertFromComposition` `input` event after explicit `compositionend` must not write the same confirmed text twice. This is NOT yet evidence of full system-IME event ordering or selection replacement across all platforms.
+- Native Rust, Node WASM and Playwright Chromium/Firefox test mid-string insertions, selected emoji deletion, selected Japanese/Cyrillic replacement, Unicode boundary refusal and unchanged graphical gates. Arbitrary undo, multi-range selection, keyboard dead keys, OS-native Japanese IME, accessibility text offsets and Canvas glyph transport are out of scope.

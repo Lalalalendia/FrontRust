@@ -369,11 +369,37 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.equal(fencedEditor.clicks,sceneBeforeEditor.clicks,
       'editor keystrokes must not activate Masonry scene');
     assert.equal(fencedEditor.keyboardEvents,sceneBeforeEditor.keyboardEvents);
+    // R4e: browser selection indices are UTF-16; Rust accepts UTF-8 byte
+    // boundaries only. Exercise a caret in the middle and selected emoji.
+    await editor.fill('Привет 🌍日本');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет 🌍日本');
+    await editor.evaluate(el=>el.setSelectionRange(7,7));
+    await page.keyboard.type('X');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет X🌍日本');
+    assert.deepEqual(await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),[8,8],
+      'ordinary mid-string insertion moved browser caret to end');
+    await editor.evaluate(el=>el.setSelectionRange(8,10)); // full emoji surrogate pair
+    await page.keyboard.press('Backspace');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет X日本');
+    assert.deepEqual(await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),[8,8],
+      'selected emoji deletion did not preserve collapsed caret');
+    await editor.evaluate(el=>el.setSelectionRange(7,8));
+    await page.keyboard.type('猫');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет 猫日本');
+    assert.deepEqual(await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),[8,8]);
+    assert.equal(await editor.inputValue(),'Привет 猫日本');
+    const afterSplice=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(afterSplice.clicks,sceneBeforeEditor.clicks);
+    assert.equal(afterSplice.keyboardEvents,sceneBeforeEditor.keyboardEvents);
     await editor.blur();
     assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().editorFocused),0);
     assert.deepEqual(errors,[]);
     await page.screenshot({path:'test-results/masonry-'+name+'.png',fullPage:true});
-    console.log('PASS '+name+' R4d genuine TextInput Unicode/preedit/commit/cancel + R4c/R3b');
+    console.log('PASS '+name+' R4e native DOM selection→Rust UTF-8 splice + R4d IME/R4c/R3b');
   }catch(error){
     await page.screenshot({path:'test-results/masonry-'+name+'-FAIL.png',fullPage:true}).catch(()=>{});
     console.error('FAIL '+name,error.stack,errors);throw error;

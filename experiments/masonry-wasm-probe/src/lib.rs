@@ -663,6 +663,53 @@ mod browser_host {
             1
         }
 
+        // R4e: arbitrary UTF-8 byte selection in the *real* upstream
+        // TextArea, without resetting its editor/cursor state.
+        // Reject UTF-8 continuation bytes before calling the Masonry API,
+        // whose invalid-boundary behavior is an intentional no-op.
+        pub fn editor_select_range(&mut self, start: usize, end: usize) -> i32 {
+            if self.editor_focused() != 1 { return -1; }
+            if self.editor_composing { return -3; }
+            let document = self.editor_document_text();
+            if start > end || end > document.len()
+                || !document.is_char_boundary(start)
+                || !document.is_char_boundary(end) { return -4; }
+            let tag = self.editor_tag;
+            self.text_root.edit_widget_with_tag(tag, |mut area| {
+                TextArea::select_byte_range(&mut area, start, end);
+            });
+            let _ = self.text_root.redraw();
+            1
+        }
+
+        // Dispatch text to upstream TextArea with its selected byte range.
+        // ClipboardPaste uses the real editor's insert_or_replace_selection,
+        // whereas the old reset_text path always moved the cursor to the end.
+        pub fn editor_splice(&mut self, start: usize, end: usize, inserted: &str) -> i32 {
+            if self.editor_focused() != 1 { return -1; }
+            if self.editor_composing { return -3; }
+            let before = self.editor_document_text();
+            if start > end || end > before.len()
+                || !before.is_char_boundary(start)
+                || !before.is_char_boundary(end) { return -4; }
+            let Some(new_len) = before.len().checked_sub(end-start)
+                .and_then(|len| len.checked_add(inserted.len())) else { return -2; };
+            if new_len > 4096 { return -2; }
+            let expected = format!("{}{}{}", &before[..start], inserted, &before[end..]);
+            let select = self.editor_select_range(start, end);
+            if select != 1 { return select; }
+            let before_actions = self.editor_actions.get();
+            self.text_root.handle_text_event(TextEvent::ClipboardPaste(inserted.to_owned()));
+            let _ = self.text_root.redraw();
+            let actual = self.editor_document_text();
+            if actual != expected { return -5; }
+            if expected != before && self.editor_actions.get() <= before_actions {
+                return -6; // Never silently accept a bypass of Masonry TextAction.
+            }
+            self.editor_committed = actual;
+            1
+        }
+
         pub fn editor_preedit(&mut self, text: &str) -> i32 {
             let accepted = self.editor_accepts(text);
             if accepted < 0 { return accepted; }
@@ -833,6 +880,24 @@ mod browser_host {
         HOST.with(|h| h.borrow_mut().as_mut()
             .map(|host| host.editor_replace(&value)).unwrap_or(-1))
     }
+    // Selection uses the old scalar ABI; dynamic Unicode insertion uses
+    // the generated wasm-bindgen String wrapper.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_select_range(start: u32, end: u32) -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_select_range(start as usize, end as usize))
+            .unwrap_or(-1))
+    }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(unsafe_code)]
+    #[wasm_bindgen]
+    pub fn mp_editor_splice(start: u32, end: u32, inserted: String) -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_splice(start as usize, end as usize, &inserted))
+            .unwrap_or(-1))
+    }
+
     #[cfg(target_arch = "wasm32")]
     #[allow(unsafe_code)]
     #[wasm_bindgen]
@@ -1176,6 +1241,43 @@ mod browser_host {
             assert!(h.rects.iter().any(|r|
                 r.rgba == Color::from_rgb8(70,120,210).to_rgba8().to_u32()),
                 "valid independent widgets must still be retained");
+        }
+
+        #[test]
+        fn r4e_real_masonry_utf8_selection_splice_and_focus_fence() {
+            let mut h = BrowserHost::new(320, 360);
+            assert_eq!(h.editor_splice(0, 0, "leak"), -1);
+            assert_eq!(h.editor_focus(true), 1);
+            assert_eq!(h.editor_replace("A🌍B日本C"), 1);
+            let before_actions = h.editor_actions.get();
+            assert_eq!(h.editor_select_range(1, 5), 1,
+                "select entire four-byte Unicode scalar inside genuine TextArea");
+            assert_eq!(h.editor_splice(1, 5, "🐱"), 1);
+            assert_eq!(h.editor_document_text(), "A🐱B日本C");
+            assert!(h.editor_actions.get() > before_actions,
+                "selection splice must emit a genuine upstream TextAction");
+            assert_eq!(h.editor_splice(2, 5, "x"), -4,
+                "never split a four-byte UTF-8 scalar");
+            assert_eq!(h.editor_splice(5, 1, "x"), -4);
+            assert_eq!(h.editor_splice(1, 5, ""), 1,
+                "deleting a selected emoji must use real TextArea");
+            assert_eq!(h.editor_committed, "AB日本C");
+            assert_eq!(h.editor_splice(1, 1, "ж"), 1,
+                "insert at a collapsed caret in the middle");
+            assert_eq!(h.editor_committed, "AжB日本C");
+            assert_eq!(h.editor_splice(1, 1, &"z".repeat(4097)), -2,
+                "oversized UTF-8 edit must fail closed");
+            assert_eq!(h.editor_committed, "AжB日本C");
+            assert_eq!(h.editor_preedit("に"), 1);
+            assert_eq!(h.editor_splice(1, 1, "x"), -3,
+                "ordinary input cannot race active composition");
+            assert_eq!(h.editor_select_range(1, 1), -3);
+            assert_eq!(h.editor_cancel(), 1);
+            assert_eq!(h.editor_committed, "AжB日本C");
+            assert_eq!(h.editor_focus(false), 0);
+            assert_eq!(h.editor_splice(1, 1, "leak"), -1);
+            assert_eq!(h.clicks.get(), 0,
+                "Rust TextArea splice must not activate the scene Button");
         }
 
         #[test]

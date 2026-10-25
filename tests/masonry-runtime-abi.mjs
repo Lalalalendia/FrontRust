@@ -30,7 +30,8 @@ const symbols=[
   'mp_editor_focus','mp_editor_focused','mp_editor_composing',
   'mp_editor_replace','mp_editor_preedit','mp_editor_update_preedit',
   'mp_editor_commit','mp_editor_cancel','mp_editor_committed_text',
-  'mp_editor_live_text','mp_editor_commits','mp_editor_actions'
+  'mp_editor_live_text','mp_editor_commits','mp_editor_actions',
+  'mp_editor_select_range','mp_editor_splice'
 ];
 for(const s of symbols)assert.equal(typeof e[s],'function','missing exported '+s);
 assert.equal(e.mp_version(),1);
@@ -221,4 +222,25 @@ assert.equal(e.mp_click_count(),clicksBeforeIme,'IME leaked into scene ButtonPre
 assert.ok(e.mp_editor_actions()>=2,'missing genuine Masonry TextAction');
 assert.equal(e.mp_editor_focus(0),0);
 assert.equal(e.mp_editor_commit('leak'),-1);
-console.log('PASS R4d real TextInput Unicode/preedit/commit/cancel and R4c focus (Node WASM)');
+// R4e: select UTF-8 byte ranges in the actual TextArea, and use its
+// ClipboardPaste routing to edit without reset_text moving the caret to end.
+assert.equal(e.mp_editor_focus(1),1);
+assert.equal(e.mp_editor_replace('A🌍B日本C'),1);
+assert.equal(e.mp_editor_select_range(1,5),1);
+const previousActions=e.mp_editor_actions();
+assert.equal(e.mp_editor_splice(1,5,'🐱'),1);
+assert.equal(e.mp_editor_committed_text(),'A🐱B日本C');
+assert.ok(e.mp_editor_actions()>previousActions,'real TextAction missing on splice');
+assert.equal(e.mp_editor_splice(2,5,'x'),-4,'invalid emoji byte boundary accepted');
+assert.equal(e.mp_editor_splice(5,1,'x'),-4,'reversed UTF-8 byte range accepted');
+assert.equal(e.mp_editor_splice(1,5,''),1);
+assert.equal(e.mp_editor_committed_text(),'AB日本C');
+assert.equal(e.mp_editor_splice(1,1,'ж'),1);
+assert.equal(e.mp_editor_committed_text(),'AжB日本C');
+assert.equal(e.mp_editor_splice(1,1,'x'.repeat(4097)),-2);
+assert.equal(e.mp_editor_preedit('に'),1);
+assert.equal(e.mp_editor_splice(1,1,'bad'),-3,'splicing over active IME accepted');
+assert.equal(e.mp_editor_cancel(),1);
+assert.equal(e.mp_editor_focus(0),0);
+assert.equal(e.mp_editor_splice(1,1,'bad'),-1);
+console.log('PASS R4e real TextArea selection splice, UTF-8 boundaries, focus/IME fences (Node WASM)');

@@ -9,6 +9,34 @@ const actionAnchor=document.createComment('Rust AccessKit button projection');
 semanticAction.before(actionAnchor);
 let compositionActive=false;
 let editorCompositionActive=false;
+let beforeEditorInput=null;
+let editorCompositionCaret=null;
+const encoder=new TextEncoder();
+function utf8Length(text){return encoder.encode(text).length;}
+function utf16ByteOffset(text,offset){
+  if(!Number.isInteger(offset)||offset<0||offset>text.length)
+    throw Error('Invalid editor UTF-16 index');
+  const previous=offset>0?text.charCodeAt(offset-1):0;
+  const next=offset<text.length?text.charCodeAt(offset):0;
+  if(previous>=0xD800&&previous<=0xDBFF&&next>=0xDC00&&next<=0xDFFF)
+    throw Error('Editor selection splits a Unicode surrogate pair');
+  return utf8Length(text.slice(0,offset));
+}
+function singleUnicodeSplice(oldValue,newValue){
+  // Compare Unicode scalars, not JS UTF-16 code units. No edit may split
+  // an emoji surrogate pair before passing UTF-8 byte ranges to Rust.
+  const oldChars=Array.from(oldValue),newChars=Array.from(newValue);
+  let prefix=0;
+  while(prefix<oldChars.length&&prefix<newChars.length
+    &&oldChars[prefix]===newChars[prefix])prefix++;
+  let suffix=0;
+  while(suffix<oldChars.length-prefix&&suffix<newChars.length-prefix
+    &&oldChars[oldChars.length-suffix-1]===newChars[newChars.length-suffix-1])suffix++;
+  const kept=oldChars.slice(0,prefix).join('');
+  const removed=oldChars.slice(prefix,oldChars.length-suffix).join('');
+  return {start:utf8Length(kept),end:utf8Length(kept+removed),
+    insert:newChars.slice(prefix,newChars.length-suffix).join('')};
+}
 let suppressNativeKeyboardClick=false;
 let engine=null;
 let scheduled=false;
@@ -32,7 +60,8 @@ const required=[
   'mp_editor_focus','mp_editor_focused','mp_editor_composing',
   'mp_editor_replace','mp_editor_preedit','mp_editor_update_preedit',
   'mp_editor_commit','mp_editor_cancel','mp_editor_committed_text',
-  'mp_editor_live_text','mp_editor_commits','mp_editor_actions'
+  'mp_editor_live_text','mp_editor_commits','mp_editor_actions',
+  'mp_editor_select_range','mp_editor_splice'
 ];
 
 
@@ -171,8 +200,18 @@ function syncTextProjection(scene){
   el('rust-editor-live').textContent=scene.editorLive;
   el('rust-editor-commits').textContent=String(scene.editorCommits);
   if(!editorCompositionActive && textEditor.value!==scene.editorCommitted){
+    const currentStart=textEditor.selectionStart;
+    const currentEnd=textEditor.selectionEnd;
     textEditor.value=scene.editorCommitted;
+    if(document.activeElement===textEditor){
+      const start=editorCompositionCaret===null?currentStart:editorCompositionCaret;
+      const end=editorCompositionCaret===null?currentEnd:editorCompositionCaret;
+      textEditor.setSelectionRange(
+        Math.min(start,scene.editorCommitted.length),
+        Math.min(end,scene.editorCommitted.length));
+    }
   }
+  if(!editorCompositionActive)editorCompositionCaret=null;
 }
 function paint(){
   scheduled=false;
@@ -314,11 +353,33 @@ try{
       throw Error('Rust refused projected DOM activation');
     requestPaint();
   });
+  function syncEditorSelection(){
+    if(editorCompositionActive||document.activeElement!==textEditor)return;
+    const source=engine.mp_editor_committed_text();
+    if(textEditor.value!==source)return;
+    const start=utf16ByteOffset(source,textEditor.selectionStart);
+    const end=utf16ByteOffset(source,textEditor.selectionEnd);
+    if(engine.mp_editor_select_range(start,end)!==1)
+      throw Error('Rust TextArea rejected the browser selection');
+  }
   textEditor.addEventListener('focus',()=>{
     if(engine.mp_editor_focus(1)!==1)throw Error('Masonry TextArea focus refused');
+    syncEditorSelection();
     updateFocusLabels();requestPaint();
   });
+  textEditor.addEventListener('select',syncEditorSelection);
+  textEditor.addEventListener('keyup',syncEditorSelection);
+  textEditor.addEventListener('pointerup',syncEditorSelection);
+  textEditor.addEventListener('beforeinput',event=>{
+    if(editorCompositionActive||event.isComposing)return;
+    const source=engine.mp_editor_committed_text();
+    beforeEditorInput=textEditor.value===source
+      ?{source,start:textEditor.selectionStart,end:textEditor.selectionEnd}
+      :null;
+  });
   textEditor.addEventListener('blur',()=>{
+    beforeEditorInput=null;
+    editorCompositionCaret=null;
     if(editorCompositionActive){
       if(engine.mp_editor_cancel()!==1)throw Error('Masonry composition cancel refused');
       editorCompositionActive=false;
@@ -327,6 +388,9 @@ try{
   });
   textEditor.addEventListener('compositionstart',()=>{
     if(engine.mp_editor_focused()!==1)throw Error('IME with no Rust TextArea focus');
+    syncEditorSelection();
+    beforeEditorInput=null;
+    editorCompositionCaret=textEditor.selectionStart;
     editorCompositionActive=true;
     if(engine.mp_editor_preedit('')!==1)throw Error('Masonry IME start refused');
     updateFocusLabels();requestPaint();
@@ -344,17 +408,44 @@ try{
       ?engine.mp_editor_commit(event.data)
       :engine.mp_editor_cancel();
     if(result!==1)throw Error('Masonry IME commit/cancel refused');
+    if(editorCompositionCaret!==null && event.data)
+      editorCompositionCaret+=event.data.length; // UTF-16 caret after committed IME text
     updateFocusLabels();requestPaint();
   });
   textEditor.addEventListener('input',event=>{
     if(editorCompositionActive||event.isComposing||event.inputType==='insertCompositionText')
       return;
-    // Browser vendors can emit a final input AFTER compositionend; if the
-    // value already matches Rust's commit, it is never committed twice.
-    if(textEditor.value!==engine.mp_editor_committed_text()){
-      if(engine.mp_editor_replace(textEditor.value)!==1)
-        throw Error('Masonry text full-value reconciliation refused');
+    const oldValue=engine.mp_editor_committed_text();
+    if(event.inputType==='insertFromComposition'){
+      // Some engines deliver the final input after compositionend. Rust
+      // already handled Commit: never insert the composed text twice.
+      if(textEditor.value!==oldValue)textEditor.value=oldValue;
+      beforeEditorInput=null;
+      syncEditorSelection();requestPaint();return;
     }
+    const newValue=textEditor.value;
+    if(newValue!==oldValue){
+      let patch=null;
+      const pending=beforeEditorInput;
+      if(pending?.source===oldValue){
+        const prefix=oldValue.slice(0,pending.start);
+        const suffix=oldValue.slice(pending.end);
+        if(newValue.startsWith(prefix)&&newValue.endsWith(suffix)
+          &&newValue.length>=prefix.length+suffix.length){
+          patch={
+            start:utf16ByteOffset(oldValue,pending.start),
+            end:utf16ByteOffset(oldValue,pending.end),
+            insert:newValue.slice(prefix.length,newValue.length-suffix.length)
+          };
+        }
+      }
+      if(!patch)patch=singleUnicodeSplice(oldValue,newValue);
+      if(engine.mp_editor_splice(patch.start,patch.end,patch.insert)!==1
+        ||engine.mp_editor_committed_text()!==newValue)
+        throw Error('Masonry UTF-8 selection splice failed');
+    }
+    beforeEditorInput=null;
+    syncEditorSelection();
     requestPaint();
   });
   inspector.addEventListener('focus',updateFocusLabels);
