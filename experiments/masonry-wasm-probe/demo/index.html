@@ -25,7 +25,7 @@
 <main>
   <div class="eyebrow">FRONTRUST / EXPERIMENTAL RENDERER</div>
   <h1>Masonry в браузере</h1>
-  <p>Два виджета, реальный <code>RenderRoot</code> и графические команды из Rust/WASM. Canvas2D отображает скруглённые заливки, сплошные контуры и вложенные прямоугольные обрезки из команд Masonry. Текст, сложные контуры и градиенты пока не реализованы.</p>
+  <p>Два виджета, реальный <code>RenderRoot</code> и графические команды из Rust/WASM. Canvas2D отображает реальные Masonry-примитивы: заливки, контуры, два вложенных клипа и повёрнутую кривую BezPath (кнопка-стрелка). Текст, композитные группы и градиенты пока не реализованы.</p>
   <div class="layout">
     <section class="surface" aria-label="Masonry Canvas2D">
       <canvas id="masonry-canvas" width="320" height="240" tabindex="0" aria-label="Экспериментальный холст: второй коричневый блок является кнопкой"></canvas>

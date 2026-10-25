@@ -59,3 +59,12 @@ scrollbar's `Stroke::new(edge_width)` using `Join::Round` (not a missing
 and non-rectangular geometry. Rust/Node/Chromium/Firefox tests assert the
 round-join scrollbar outline survives alongside the red miter border,
 and that unsupported operation count remains zero.
+
+## R3 (experimental): native BezPath geometry, nested Portals and widget transforms
+
+- A real `DisclosureButton` paints an open `kurbo::BezPath` in magenta. Its `WidgetTag` is edited through `RenderRoot::edit_widget_with_tag` with a 0.45-radian transform before the scene is captured; JavaScript does not generate or rotate the arrow itself.
+- The Rust scene bridge converts bounded `PathEl` elements (MoveTo/LineTo/QuadTo/CurveTo/ClosePath) to numeric WASM exports. The Canvas2D replay builds paths with `moveTo`, `lineTo`, `quadraticCurveTo`, `bezierCurveTo` and `closePath`, preserving the real 6-element affine transform.
+- The green child is now wrapped by **two** genuine `Portal` instances, with 65px and 80px viewports. Tests require nesting depth >=2 at the green fill, balanced push/pop commands and zero skipped draws.
+- Open path strokes export a round/butt/square line-cap style in addition to the existing join and miter limit. Unsupported differing start/end caps and dashed paths remain fail-closed.
+- Node and both browser E2Es check the real Path payload and its nonzero rotation. Chromium/Firefox additionally inspect actual magenta pixels along a computed transformed path segment.
+- No claim of SVG-level completeness: advanced composite groups, filled glyphs, image resources, gradient paints, arbitrary stroked clip regions, full DPI/IME/a11y and CSS layout remain out of scope. R3 becomes Verified only on native + real WASM + Node + Chromium/Firefox PASS.

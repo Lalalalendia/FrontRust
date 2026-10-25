@@ -15,7 +15,8 @@ const symbols=[
   'mp_rect_matrix_a','mp_rect_matrix_b','mp_rect_matrix_c',
   'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f',
   'mp_op_count','mp_op_kind','mp_op_shape','mp_op_stroke_width',
-  'mp_op_stroke_join','mp_op_miter_limit'
+  'mp_op_stroke_join','mp_op_miter_limit','mp_op_stroke_cap',
+  'mp_rect_path_count','mp_rect_path_kind','mp_rect_path_arg'
 ];
 for(const s of symbols)assert.equal(typeof e[s],'function','missing exported '+s);
 assert.equal(e.mp_version(),1);
@@ -41,7 +42,8 @@ assert.ok([e.mp_rect_matrix_a(rounded),e.mp_rect_matrix_b(rounded),
   e.mp_rect_matrix_e(rounded),e.mp_rect_matrix_f(rounded)].every(Number.isFinite));
 const ops=Array.from({length:e.mp_op_count()},(_,i)=>({
  kind:e.mp_op_kind(i),shape:e.mp_op_shape(i),strokeWidth:e.mp_op_stroke_width(i),
- strokeJoin:e.mp_op_stroke_join(i),miterLimit:e.mp_op_miter_limit(i)
+ strokeJoin:e.mp_op_stroke_join(i),miterLimit:e.mp_op_miter_limit(i),
+ strokeCap:e.mp_op_stroke_cap(i)
 }));
 assert.ok(ops.length>rects.length,'clip pop must be preserved in painter order');
 const border=ops.find(o=>o.kind===2&&o.strokeWidth>=3);
@@ -61,6 +63,34 @@ const greenOpIndex=ops.findIndex(o=>o.kind===1&&o.shape===greenIndex);
 assert.ok(greenOpIndex>clipPush&&greenOpIndex<clipPop,'clipped draw must remain inside clip scope');
 assert.ok(clip.width<rects[greenIndex].width,'viewport must cut green background horizontally');
 assert.equal(e.mp_skipped_draws(),0,'unexpected lossy paint ops');
+let depth=0,maxDepth=0,depthAtGreen=0;
+for(const op of ops){
+  if(op.kind===3){depth++;maxDepth=Math.max(maxDepth,depth);}
+  if(op.kind===1&&op.shape===greenIndex)depthAtGreen=depth;
+  if(op.kind===4){depth--;assert.ok(depth>=0,'clip popped below zero');}
+}
+assert.equal(depth,0,'nested Masonry clip stack not balanced');
+assert.ok(maxDepth>=2&&depthAtGreen>=2,'two real nested Portals must clip green fill');
+const arrowColor=encode(230,50,180);
+const arrowIndex=rects.findIndex((r,i)=>r.rgba===arrowColor&&e.mp_rect_path_count(i)>0);
+assert.ok(arrowIndex>=0,'actual Masonry DisclosureButton path missing');
+const pathCount=e.mp_rect_path_count(arrowIndex);
+assert.ok(pathCount>=3&&pathCount<=512);
+const pathCommands=Array.from({length:pathCount},(_,j)=>({
+ kind:e.mp_rect_path_kind(arrowIndex,j),
+ args:Array.from({length:6},(_,k)=>e.mp_rect_path_arg(arrowIndex,j,k))
+}));
+assert.equal(pathCommands[0].kind,1,'arrow must start with PathEl::MoveTo');
+assert.ok(pathCommands.some(x=>x.kind===2),'arrow must contain real PathEl::LineTo');
+assert.ok(pathCommands.every(x=>x.args.every(Number.isFinite)));
+const matrix=[e.mp_rect_matrix_a(arrowIndex),e.mp_rect_matrix_b(arrowIndex),
+ e.mp_rect_matrix_c(arrowIndex),e.mp_rect_matrix_d(arrowIndex),
+ e.mp_rect_matrix_e(arrowIndex),e.mp_rect_matrix_f(arrowIndex)];
+assert.ok(Math.abs(matrix[1])>0.1&&Math.abs(matrix[2])>0.1,
+ 'Rust Masonry widget rotation must survive to the WASM transform ABI');
+const arrowStroke=ops.find(o=>o.kind===2&&o.shape===arrowIndex);
+assert.ok(arrowStroke,'real Masonry arrow must have a stroke');
+assert.equal(arrowStroke.strokeCap,1,'open arrow Round caps were not preserved');
 const target=rects.find(r=>r.rgba===brown);
 assert.ok(target,'button child surface from Masonry missing');
 assert.ok(target.width>0&&target.height>0,'button surface has no layout');
@@ -74,4 +104,4 @@ assert.deepEqual([e.mp_width(),e.mp_height()],[400,300]);
 rects=getRects();
 assert.ok(rects.some(r=>r.rgba===blue));
 assert.ok(rects.some(r=>r.rgba===brown));
-console.log('PASS real Masonry WASM stroke + clip painter order, colors, pointer ButtonPress and resize');
+console.log('PASS R3 real Masonry nested Portal clip depth, transformed BezPath, Stroke/Fill, ButtonPress and resize');

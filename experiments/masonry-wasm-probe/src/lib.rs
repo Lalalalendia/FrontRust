@@ -19,21 +19,21 @@ pub fn masonry_native_host_type_size() -> usize {
 #[cfg(feature = "widgets")]
 mod browser_host {
     use masonry::app::{RenderRoot, RenderRootOptions, RenderRootSignal, WindowSizePolicy};
-    use masonry::core::{NewWidget, PropertySet, Widget, WindowEvent};
+    use masonry::core::{NewWidget, PropertySet, Widget, WidgetTag, WindowEvent};
     use masonry::imaging::record::Clip;
     use masonry::dpi::{PhysicalPosition, PhysicalSize};
     use masonry::imaging::record::{Command, Draw, Geometry, Scene};
-    use masonry::kurbo::{Join, Point};
+    use masonry::kurbo::{Affine, Cap, Join, PathEl, Point, Shape as _, Vec2};
     use masonry::layout::{AsUnit, Length};
     use masonry::peniko::{Brush, Color, Fill};
-    use masonry::properties::{Background, BorderColor, BorderWidth, CornerRadius, Dimensions};
+    use masonry::properties::{Background, BorderColor, BorderWidth, ContentColor, CornerRadius, Dimensions};
     use masonry::theme::default_property_set;
     use masonry::ui_events::keyboard::Modifiers;
     use masonry::ui_events::pointer::{
         PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
         PointerType,
     };
-    use masonry::widgets::{Button, ButtonPress, Flex, Portal, SizedBox};
+    use masonry::widgets::{Button, ButtonPress, DisclosureButton, Flex, Portal, SizedBox};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::Arc;
@@ -52,6 +52,15 @@ mod browser_host {
         pub matrix: [f64; 6],
         /// Clockwise (tl,tr,br,bl), local pixels; all zero means Rect.
         pub radii: [f64; 4],
+        // A bounded vector of actual Kurbo path commands, empty for Rect/RoundedRect.
+        pub path: Vec<PathCommand>,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct PathCommand {
+        // 1=MoveTo, 2=LineTo, 3=QuadTo, 4=CurveTo, 5=ClosePath.
+        kind: i32,
+        args: [f64; 6],
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -63,18 +72,41 @@ mod browser_host {
         // 0=Miter, 1=Round, 2=Bevel. Shape transport is closed Rect/RoundedRect.
         stroke_join: i32,
         miter_limit: f64,
+        // Closed rects ignore caps; open paths use this start/end cap.
+        stroke_cap: i32,
     }
 
     fn shape_record(shape: &Geometry, transform: &masonry::kurbo::Affine, color: Color)
         -> Option<SolidRect>
     {
-        let (rect, radii) = match shape {
-            Geometry::Rect(rect) => (*rect, [0.0;4]),
+        let (rect, radii, path) = match shape {
+            Geometry::Rect(rect) => (*rect, [0.0; 4], Vec::new()),
             Geometry::RoundedRect(round) => {
                 let r = round.radii();
-                (round.rect(), [r.top_left, r.top_right, r.bottom_right, r.bottom_left])
+                (round.rect(), [r.top_left, r.top_right, r.bottom_right, r.bottom_left], Vec::new())
             }
-            Geometry::Path(_) => return None,
+            Geometry::Path(bez) => {
+                // Avoid exporting unbounded geometry to the browser through scalar getters.
+                if bez.elements().is_empty() || bez.elements().len() > 512 { return None; }
+                let mut path = Vec::with_capacity(bez.elements().len());
+                for segment in bez.elements() {
+                    let mut args = [0.0_f64; 6];
+                    let kind = match *segment {
+                        PathEl::MoveTo(p) => { args[..2].copy_from_slice(&[p.x,p.y]); 1 },
+                        PathEl::LineTo(p) => { args[..2].copy_from_slice(&[p.x,p.y]); 2 },
+                        PathEl::QuadTo(a,b) => {
+                            args[..4].copy_from_slice(&[a.x,a.y,b.x,b.y]); 3
+                        }
+                        PathEl::CurveTo(a,b,c) => {
+                            args.copy_from_slice(&[a.x,a.y,b.x,b.y,c.x,c.y]); 4
+                        }
+                        PathEl::ClosePath => 5,
+                    };
+                    if args.iter().any(|n| !n.is_finite()) { return None; }
+                    path.push(PathCommand { kind, args });
+                }
+                (bez.bounding_box(), [0.0;4], path)
+            }
         };
         let matrix = transform.as_coeffs();
         let points = [
@@ -95,7 +127,7 @@ mod browser_host {
             x, y, width:x1-x, height:y1-y,
             rgba:color.to_rgba8().to_u32(),
             local:[rect.x0, rect.y0, rect.width(), rect.height()],
-            matrix, radii,
+            matrix, radii, path,
         })
     }
 
@@ -125,14 +157,29 @@ mod browser_host {
             };
             // Both colored child surfaces are actual Masonry widgets.
             // The second is inside an actual Button and sends ButtonPress actions.
+            // The tagged disclosure arrow is a REAL Masonry BezPath stroke.
+            // Applying an affine widget transform tests the full matrix pipeline.
+            let arrow_tag: WidgetTag<DisclosureButton> = WidgetTag::unique();
             let root_widget = Flex::column()
                 .with_fixed(tile(Color::from_rgb8(70, 120, 210), true))
                 .with_fixed(NewWidget::new(Button::new(tile(Color::from_rgb8(195, 145, 105), false))))
                 // A real Portal (80px viewport) clips its 120px-wide green child.
                 // This exercises PushClip / Draw / PopClip from Masonry's paint pass.
                 .with_fixed(
-                    NewWidget::new(Portal::new(tile(Color::from_rgb8(40, 170, 100), false)))
-                        .with_props(PropertySet::one(Dimensions::fixed(80.px(), 50.px())))
+                    NewWidget::new(Portal::new(
+                        NewWidget::new(Portal::new(tile(Color::from_rgb8(40, 170, 100), false)))
+                            .with_props(PropertySet::one(Dimensions::fixed(80.px(), 50.px())))
+                    ))
+                    .with_props(PropertySet::one(Dimensions::fixed(65.px(), 50.px())))
+                )
+                .with_fixed(
+                    NewWidget::new(DisclosureButton::new(false))
+                        .with_tag(arrow_tag)
+                        .with_props(
+                            PropertySet::new()
+                                .with(Dimensions::fixed(64.px(),64.px()))
+                                .with(ContentColor::new(Color::from_rgb8(230,50,180)))
+                        )
                 )
                 .prepare();
             let clicks = Rc::new(Cell::new(0_i32));
@@ -155,6 +202,12 @@ mod browser_host {
                     test_font: None,
                 },
             );
+            // Transform only this existing Rust widget, never the Canvas JS shape.
+            let center = Vec2::new(32.0,32.0);
+            let matrix = Affine::translate(center)
+                .then_rotate(0.45)
+                .then_translate(-center);
+            root.edit_widget_with_tag(arrow_tag, |mut arrow| arrow.set_transform(matrix));
             root.handle_window_event(WindowEvent::EnableAccessTree);
             let mut host = Self {
                 root, rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
@@ -199,7 +252,7 @@ mod browser_host {
                                 Clip::Fill { transform, shape, fill_rule }
                                     if *fill_rule == Fill::NonZero => {
                                     if let Some(record) = shape_record(shape, transform, Color::TRANSPARENT) {
-                                        self.add_op(record, 3, 0.0, 0, 4.0);
+                                        self.add_op(record, 3, 0.0, 0, 4.0, 0);
                                         true
                                     } else { false }
                                 }
@@ -212,7 +265,7 @@ mod browser_host {
                     }
                     Command::PopClip => {
                         match clip_support.pop() {
-                            Some(true) => self.ops.push(SceneOp { kind:4, shape:-1, stroke_width:0.0, stroke_join:0, miter_limit:4.0 }),
+                            Some(true) => self.ops.push(SceneOp { kind:4, shape:-1, stroke_width:0.0, stroke_join:0, miter_limit:4.0, stroke_cap:0 }),
                             Some(false) => {},
                             None => self.skipped_draws += 1,
                         }
@@ -222,10 +275,10 @@ mod browser_host {
                             self.skipped_draws += 1;
                             continue;
                         }
-                        let (kind, shape, transform, color, stroke_width, stroke_join, miter_limit) =
+                        let (kind, shape, transform, color, stroke_width, stroke_join, miter_limit, stroke_cap) =
                             match flattened.draw_op(*id) {
                                 Draw::Fill { shape, transform, brush: Brush::Solid(color), fill_rule: Fill::NonZero, .. } =>
-                                    (1, shape, transform, *color, 0.0, 0, 4.0),
+                                    (1, shape, transform, *color, 0.0, 0, 4.0, 0),
                                 Draw::Stroke { shape, transform, brush: Brush::Solid(color), stroke, .. }
                                     if stroke.width.is_finite() && stroke.width > 0.0
                                         && stroke.dash_pattern.is_empty()
@@ -235,12 +288,22 @@ mod browser_host {
                                     // Join::Round. Canvas supports Miter, Round and Bevel.
                                     // We only serialize closed Rect/RoundedRect geometry;
                                     // cap style does not affect such a closed stroke.
+                                    if matches!(shape, Geometry::Path(_))
+                                        && stroke.start_cap != stroke.end_cap {
+                                        self.skipped_draws += 1;
+                                        continue;
+                                    }
+                                    let cap = match stroke.start_cap {
+                                        Cap::Butt => 0,
+                                        Cap::Round => 1,
+                                        Cap::Square => 2,
+                                    };
                                     let join = match stroke.join {
                                         Join::Miter => 0,
                                         Join::Round => 1,
                                         Join::Bevel => 2,
                                     };
-                                    (2, shape, transform, *color, stroke.width, join, stroke.miter_limit)
+                                    (2, shape, transform, *color, stroke.width, join, stroke.miter_limit, cap)
                                 },
                                 // Every other draw is explicitly counted as unsupported.
                                 _ => {
@@ -249,7 +312,7 @@ mod browser_host {
                                 }
                             };
                         if let Some(record) = shape_record(shape, transform, color) {
-                            self.add_op(record, kind, stroke_width, stroke_join, miter_limit);
+                            self.add_op(record, kind, stroke_width, stroke_join, miter_limit, stroke_cap);
                         } else { self.skipped_draws += 1; }
                     }
                 }
@@ -260,11 +323,11 @@ mod browser_host {
         }
 
         fn add_op(&mut self, record: SolidRect, kind: i32, stroke_width: f64,
-            stroke_join: i32, miter_limit: f64)
+            stroke_join: i32, miter_limit: f64, stroke_cap: i32)
         {
             let idx = self.rects.len() as i32;
             self.rects.push(record);
-            self.ops.push(SceneOp { kind, shape: idx, stroke_width, stroke_join, miter_limit });
+            self.ops.push(SceneOp { kind, shape: idx, stroke_width, stroke_join, miter_limit, stroke_cap });
         }
 
         pub fn resize(&mut self, width: u32, height: u32) -> i32 {
@@ -458,6 +521,39 @@ mod browser_host {
         get_f64(|h| h.ops.get(i.max(0) as usize).map(|o| o.miter_limit).unwrap_or(f64::NAN))
     }
 
+    // SAFETY: scalar-only exported symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_op_stroke_cap(i: i32) -> i32 {
+        get_i32(|h| h.ops.get(i.max(0) as usize).map(|o| o.stroke_cap).unwrap_or(-1))
+    }
+
+    // SAFETY: scalar-only exported symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_path_count(i: i32) -> i32 {
+        get_i32(|h| h.rects.get(i.max(0) as usize).map(|r| r.path.len() as i32).unwrap_or(-1))
+    }
+
+    // SAFETY: scalar-only exported symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_path_kind(i: i32, j: i32) -> i32 {
+        get_i32(|h| h.rects.get(i.max(0) as usize)
+            .and_then(|r| r.path.get(j.max(0) as usize))
+            .map(|p| p.kind).unwrap_or(-1))
+    }
+
+    // SAFETY: scalar-only exported symbol.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_rect_path_arg(i: i32, j: i32, k: i32) -> f64 {
+        get_f64(|h| h.rects.get(i.max(0) as usize)
+            .and_then(|r| r.path.get(j.max(0) as usize))
+            .and_then(|p| p.args.get(k.max(0) as usize))
+            .copied().unwrap_or(f64::NAN))
+    }
+
     // This is a scalar-only ABI experiment; no raw pointers or shared memory.
     // WASM / Canvas uses these values instead of prematurely rasterizing
     // rotated or rounded geometry into axis-aligned rectangles.
@@ -582,7 +678,29 @@ mod browser_host {
             assert!(h.ops.iter().any(|o| o.kind == 2 && o.stroke_join == 1), "round-join scrollbar stroke missing");
             assert!(h.ops.iter().any(|o| o.kind == 3), "clip push missing");
             assert!(h.ops.iter().any(|o| o.kind == 4), "clip pop missing");
-            assert_eq!(h.skipped_draws, 0, "lossy scene operations in R2 demo");
+            assert_eq!(h.skipped_draws, 0, "lossy scene operations in R3 demo");
+            let mut depth: i32 = 0;
+            let mut peak: i32 = 0;
+            let mut green_depth: i32 = 0;
+            for op in &h.ops {
+                if op.kind == 3 { depth += 1; peak = peak.max(depth); }
+                if op.kind == 1 && op.shape >= 0
+                    && h.rects[op.shape as usize].rgba
+                        == Color::from_rgb8(40,170,100).to_rgba8().to_u32()
+                { green_depth = depth; }
+                if op.kind == 4 { depth -= 1; assert!(depth>=0); }
+            }
+            assert_eq!(depth,0,"unbalanced nested clip scopes");
+            assert!(peak>=2 && green_depth>=2,"green fill must sit inside two real Portal clips");
+            let arrow_color = Color::from_rgb8(230,50,180).to_rgba8().to_u32();
+            let arrow = h.rects.iter().find(|r| r.rgba==arrow_color && !r.path.is_empty())
+                .expect("real Masonry DisclosureButton BezPath stroke missing");
+            assert!(arrow.path.len()>=3);
+            assert!(arrow.matrix[1].abs()>0.1 && arrow.matrix[2].abs()>0.1,
+                "Rust rotated widget transform was flattened");
+            assert!(h.ops.iter().any(|op| op.kind==2 && op.stroke_cap==1
+                && op.shape>=0 && h.rects[op.shape as usize].rgba==arrow_color),
+                "open arrow stroke must preserve round caps");
             assert!(h.resize(400, 300) >= 2);
             assert_eq!(h.size(), (400,300));
         }

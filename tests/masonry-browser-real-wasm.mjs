@@ -27,6 +27,15 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.ok(first.rects.length>=3);
     assert.equal(first.skippedDraws,0,'unsupported operations must fail the fidelity gate');
     assert.ok(first.ops.length>first.rects.length);
+    let depth=0,maxDepth=0,greenDepth=0;
+    const realGreen=first.rects.findIndex(r=>(r.rgba&255)===40&&((r.rgba>>>8)&255)===170);
+    for(const op of first.ops){
+      if(op.kind===3){depth++;maxDepth=Math.max(depth,maxDepth);}
+      if(op.kind===1&&op.shape===realGreen)greenDepth=depth;
+      if(op.kind===4){depth--;assert.ok(depth>=0);}
+    }
+    assert.equal(depth,0,'nested clip depth not balanced');
+    assert.ok(maxDepth>=2&&greenDepth>=2,'two real Portal clipping scopes not retained');
     const blue=first.rects.find(r=>(r.rgba&255)===70&&((r.rgba>>>8)&255)===120);
     const brown=first.rects.find(r=>(r.rgba&255)===195&&((r.rgba>>>8)&255)===145);
     assert.ok(blue&&brown,'Both colored rectangles must come from actual Masonry paint scene');
@@ -79,6 +88,31 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
       'Green fill missing inside clip: '+JSON.stringify(pixels.inside));
     assert.ok(!(pixels.outside[1]>145&&pixels.outside[0]<90),
       'Clipped region leaked outside viewport: '+JSON.stringify(pixels.outside));
+    // Real Masonry DisclosureButton (open BezPath) is transformed by a
+    // nontrivial Rust WidgetMut::set_transform, then replayed into Canvas2D.
+    const magenta=first.rects.find(r=>(r.rgba&255)===230
+      &&((r.rgba>>>8)&255)===50&&r.path.length>0);
+    assert.ok(magenta,'Masonry BezPath did not cross the WASM bridge');
+    assert.ok(Math.abs(magenta.matrix[1])>0.1&&Math.abs(magenta.matrix[2])>0.1,
+      'Rust transform matrix was flattened');
+    assert.ok(magenta.path.some(p=>p.kind===1)&&magenta.path.some(p=>p.kind===2));
+    const initial=magenta.path.find(p=>p.kind===1).args;
+    const following=magenta.path.find(p=>p.kind===2).args;
+    const midX=(initial[0]+following[0])/2, midY=(initial[1]+following[1])/2;
+    const [a,b,c,d,e,f]=magenta.matrix;
+    const rendered={x:a*midX+c*midY+e,y:b*midX+d*midY+f};
+    const samples=await page.evaluate(({x,y})=>{
+      const ctx=document.querySelector('#masonry-canvas').getContext('2d');
+      const out=[];
+      for(let dy=-3;dy<=3;dy++)for(let dx=-3;dx<=3;dx++){
+        const px=Math.floor(x+dx),py=Math.floor(y+dy);
+        if(px>=0&&py>=0&&px<ctx.canvas.width&&py<ctx.canvas.height)
+          out.push(Array.from(ctx.getImageData(px,py,1,1).data));
+      }
+      return out;
+    },rendered);
+    assert.ok(samples.some(c=>c[0]>150&&c[1]<120&&c[2]>90),
+      'Rotated real Masonry BezPath stroke did not paint the expected Canvas pixels');
     const canvas=page.locator('#masonry-canvas');
     const box=await canvas.boundingBox();
     assert.ok(box);
@@ -96,7 +130,7 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.ok(resized.rects.some(r=>(r.rgba&255)===70));
     assert.deepEqual(errors,[]);
     await page.screenshot({path:'test-results/masonry-'+name+'.png',fullPage:true});
-    console.log('PASS '+name+' real Masonry Draw::Stroke, Portal clip, solid rounded fills, ButtonPress and resize');
+    console.log('PASS '+name+' real Masonry R3 nested clips, rotated BezPath pixels, ButtonPress and resize');
   }catch(error){
     await page.screenshot({path:'test-results/masonry-'+name+'-FAIL.png',fullPage:true}).catch(()=>{});
     console.error('FAIL '+name,error.stack,errors);throw error;

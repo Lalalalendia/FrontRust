@@ -15,7 +15,8 @@ const required=[
   'mp_rect_matrix_a','mp_rect_matrix_b','mp_rect_matrix_c',
   'mp_rect_matrix_d','mp_rect_matrix_e','mp_rect_matrix_f',
   'mp_op_count','mp_op_kind','mp_op_shape','mp_op_stroke_width',
-  'mp_op_stroke_join','mp_op_miter_limit'
+  'mp_op_stroke_join','mp_op_miter_limit','mp_op_stroke_cap',
+  'mp_rect_path_count','mp_rect_path_kind','mp_rect_path_arg'
 ];
 
 function sceneRects(){
@@ -30,7 +31,15 @@ function sceneRects(){
     radii:[engine.mp_rect_radius_tl(i),engine.mp_rect_radius_tr(i),
       engine.mp_rect_radius_br(i),engine.mp_rect_radius_bl(i)],
     matrix:[engine.mp_rect_matrix_a(i),engine.mp_rect_matrix_b(i),engine.mp_rect_matrix_c(i),
-      engine.mp_rect_matrix_d(i),engine.mp_rect_matrix_e(i),engine.mp_rect_matrix_f(i)]
+      engine.mp_rect_matrix_d(i),engine.mp_rect_matrix_e(i),engine.mp_rect_matrix_f(i)],
+    path:(()=>{
+      const count=engine.mp_rect_path_count(i);
+      if(count<0||count>512)throw Error('Invalid WASM path length: '+count);
+      return Array.from({length:count},(_,j)=>({
+        kind:engine.mp_rect_path_kind(i,j),
+        args:Array.from({length:6},(_,k)=>engine.mp_rect_path_arg(i,j,k))
+      }));
+    })()
   }));
 }
 function sceneOps(){
@@ -41,7 +50,8 @@ function sceneOps(){
     shape:engine.mp_op_shape(i),
     strokeWidth:engine.mp_op_stroke_width(i),
     strokeJoin:engine.mp_op_stroke_join(i),
-    miterLimit:engine.mp_op_miter_limit(i)
+    miterLimit:engine.mp_op_miter_limit(i),
+    strokeCap:engine.mp_op_stroke_cap(i)
   }));
 }
 function snapshot(){
@@ -61,7 +71,20 @@ function paint(){
   // save/clip/restore scope, not a decorative bounding rectangle.
   const shapePath=r=>{
     ctx.beginPath();
-    if(r.radii.some(v=>v>0))ctx.roundRect(...r.local,r.radii);
+    if(r.path.length){
+      for(const step of r.path){
+        if(!step.args.every(Number.isFinite))throw Error('Nonfinite Masonry PathEl');
+        const p=step.args;
+        switch(step.kind){
+          case 1:ctx.moveTo(p[0],p[1]);break;
+          case 2:ctx.lineTo(p[0],p[1]);break;
+          case 3:ctx.quadraticCurveTo(p[0],p[1],p[2],p[3]);break;
+          case 4:ctx.bezierCurveTo(p[0],p[1],p[2],p[3],p[4],p[5]);break;
+          case 5:ctx.closePath();break;
+          default:throw Error('Unsupported Masonry PathEl kind: '+step.kind);
+        }
+      }
+    }else if(r.radii.some(v=>v>0))ctx.roundRect(...r.local,r.radii);
     else ctx.rect(...r.local);
   };
   let clipDepth=0;
@@ -74,6 +97,7 @@ function paint(){
     if(!r)throw Error('Invalid Masonry operation geometry index');
     if(![...r.local,...r.radii,...r.matrix].every(Number.isFinite))
       throw Error('Nonfinite Masonry local geometry');
+    if(r.path.length>512)throw Error('Oversized Masonry path');
     if(op.kind===3){
       // Keep the clip in the global scene coordinates of the Rust transform.
       ctx.save();
@@ -98,8 +122,11 @@ function paint(){
       if(!Number.isFinite(op.miterLimit)||op.miterLimit<=0)
         throw Error('Invalid Masonry stroke miter limit');
       ctx.strokeStyle=color;ctx.lineWidth=op.strokeWidth;
+      const caps=['butt','round','square'];
+      if(!Number.isInteger(op.strokeCap)||!caps[op.strokeCap])
+        throw Error('Unsupported Masonry line cap: '+op.strokeCap);
       ctx.lineJoin=joins[op.strokeJoin];ctx.miterLimit=op.miterLimit;
-      // ABI carries closed shapes only: caps are irrelevant.
+      ctx.lineCap=caps[op.strokeCap];
       ctx.stroke();
     }else{
       ctx.fillStyle=color;ctx.fill('nonzero');
