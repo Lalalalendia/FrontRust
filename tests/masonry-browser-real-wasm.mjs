@@ -321,9 +321,59 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     await page.waitForTimeout(100);
     assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().clicks),
       disabledClicks+1,'recreated button doubled Enter activation');
+    // R4d: use native browser input events for ordinary Unicode typing and
+    // explicitly bounded composition lifecycle events for genuine Rust TextArea.
+    const editor=page.locator('#masonry-text-editor');
+    const sceneBeforeEditor=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    await editor.fill('Привет ');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет ');
+    assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().editorFocused),1);
+    await page.keyboard.type('🌍');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет 🌍');
+    const beforePreedit=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    await editor.evaluate(el=>{
+      el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));
+      el.dispatchEvent(new CompositionEvent('compositionupdate',{bubbles:true,data:'に'}));
+    });
+    const duringPreedit=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(duringPreedit.editorCommitted,'Привет 🌍',
+      'IME preedit was persisted');
+    assert.notEqual(duringPreedit.editorLive,duringPreedit.editorCommitted);
+    assert.equal(duringPreedit.editorComposing,1);
+    assert.equal(duringPreedit.owner,'composition');
+    await editor.evaluate(el=>el.dispatchEvent(
+      new CompositionEvent('compositionupdate',{bubbles:true,data:'日本'})));
+    assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().editorCommitted),
+      'Привет 🌍');
+    await editor.evaluate(el=>el.dispatchEvent(
+      new CompositionEvent('compositionend',{bubbles:true,data:'日本'})));
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет 🌍日本');
+    const afterCommit=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(afterCommit.editorCommits,beforePreedit.editorCommits+1);
+    assert.equal(afterCommit.editorComposing,0);
+    await page.waitForFunction(()=>document.querySelector('#masonry-text-editor')?.value==='Привет 🌍日本');
+    await editor.evaluate(el=>{
+      el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));
+      el.dispatchEvent(new CompositionEvent('compositionupdate',{bubbles:true,data:'未確定'}));
+      el.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:''}));
+    });
+    const canceled=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(canceled.editorCommitted,'Привет 🌍日本','canceled composition mutated committed text');
+    assert.equal(canceled.editorLive,'Привет 🌍日本');
+    assert.equal(canceled.editorCommits,afterCommit.editorCommits);
+    await page.keyboard.press('Enter');
+    const fencedEditor=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(fencedEditor.clicks,sceneBeforeEditor.clicks,
+      'editor keystrokes must not activate Masonry scene');
+    assert.equal(fencedEditor.keyboardEvents,sceneBeforeEditor.keyboardEvents);
+    await editor.blur();
+    assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().editorFocused),0);
     assert.deepEqual(errors,[]);
     await page.screenshot({path:'test-results/masonry-'+name+'.png',fullPage:true});
-    console.log('PASS '+name+' R4c AccessKit NodeId/disabled/removal/recreation/focus plus R4b/R4a/R3b');
+    console.log('PASS '+name+' R4d genuine TextInput Unicode/preedit/commit/cancel + R4c/R3b');
   }catch(error){
     await page.screenshot({path:'test-results/masonry-'+name+'-FAIL.png',fullPage:true}).catch(()=>{});
     console.error('FAIL '+name,error.stack,errors);throw error;

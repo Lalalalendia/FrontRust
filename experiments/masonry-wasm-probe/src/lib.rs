@@ -20,7 +20,7 @@ pub fn masonry_native_host_type_size() -> usize {
 mod browser_host {
     use masonry::accesskit::{Action as AccessAction, NodeId as AccessNodeId, Role as AccessRole};
     use masonry::app::{RenderRoot, RenderRootOptions, RenderRootSignal, WindowSizePolicy};
-    use masonry::core::{NewWidget, PropertySet, TextEvent, Widget, WidgetTag, WindowEvent};
+    use masonry::core::{Ime, NewWidget, PropertySet, TextEvent, Widget, WidgetTag, WindowEvent};
     use masonry::imaging::record::Clip;
     use masonry::dpi::{PhysicalPosition, PhysicalSize};
     use masonry::imaging::{Painter, record::{Command, Draw, Geometry, Scene}};
@@ -34,10 +34,12 @@ mod browser_host {
         PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
         PointerType,
     };
-    use masonry::widgets::{Button, ButtonPress, Canvas, DisclosureButton, Flex, Portal, SizedBox};
+    use masonry::widgets::{Button, ButtonPress, Canvas, DisclosureButton, Flex, Portal, SizedBox, TextAction, TextArea, TextInput};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::Arc;
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen::prelude::wasm_bindgen;
 
     #[derive(Debug, Clone)]
     pub struct SolidRect {
@@ -134,6 +136,15 @@ mod browser_host {
 
     pub struct BrowserHost {
         root: RenderRoot,
+        // A separate genuine Masonry TextInput RenderRoot. Its glyph drawing
+        // is intentionally NOT passed to the R3b limited Canvas2D transport:
+        // native DOM input supplies text presentation/OS IME behavior.
+        text_root: RenderRoot,
+        editor_tag: WidgetTag<TextArea<true>>,
+        editor_committed: String,
+        editor_composing: bool,
+        editor_commits: i32,
+        editor_actions: Rc<Cell<i32>>,
         rects: Vec<SolidRect>,
         ops: Vec<SceneOp>,
         scene_layers: i32,
@@ -252,8 +263,38 @@ mod browser_host {
                 });
             });
             root.handle_window_event(WindowEvent::EnableAccessTree);
+            // The real TextArea is nested in the real TextInput; tag the
+            // focusable TextArea, not its generic-container wrapper.
+            let editor_tag: WidgetTag<TextArea<true>> = WidgetTag::named("frontrust-r4d-editor");
+            let editor_actions = Rc::new(Cell::new(0_i32));
+            let count_actions = Rc::clone(&editor_actions);
+            let text_widget = NewWidget::new(TextInput::from_text_area(
+                NewWidget::new(TextArea::new_editable("")).with_tag(editor_tag)
+            ));
+            let mut text_root = RenderRoot::new(
+                text_widget,
+                move |signal| {
+                    if let RenderRootSignal::Action(action, _) = signal {
+                        if action.is::<TextAction>() {
+                            count_actions.set(count_actions.get().saturating_add(1));
+                        }
+                    }
+                },
+                RenderRootOptions {
+                    default_properties: Arc::new(default_property_set()),
+                    use_system_fonts: false,
+                    size_policy: WindowSizePolicy::User,
+                    size: PhysicalSize::new(320, 48),
+                    scale_factor: 1.0,
+                    test_font: None,
+                },
+            );
+            text_root.handle_window_event(WindowEvent::EnableAccessTree);
+            let _ = text_root.redraw();
             let mut host = Self {
-                root, rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
+                root, text_root, editor_tag, editor_committed: String::new(),
+                editor_composing: false, editor_commits: 0, editor_actions,
+                rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
                 accessibility_nodes: 0, accessible_button: false,
                 access_button_id: None, access_button_disabled: false, access_focus_id: 0,
                 skipped_draws: 0, clicks, curve_tag, button_tag, root_tag,
@@ -557,6 +598,104 @@ mod browser_host {
             self.clicks.get()
         }
 
+        // R4d: the actual upstream Masonry TextArea is the text authority.
+        // `TextAction::Changed` also occurs on preedit; only these explicit
+        // accepted commit/replace paths advance the durable text projection.
+        pub fn editor_live_text(&self) -> String {
+            self.text_root.get_widget_with_tag(self.editor_tag)
+                .map(|area| area.inner().text().to_string())
+                .unwrap_or_default()
+        }
+
+        pub fn editor_focused(&self) -> i32 {
+            let id = self.text_root.get_widget_with_tag(self.editor_tag)
+                .map(|area| area.id());
+            i32::from(id.is_some() && self.text_root.focused_widget() == id)
+        }
+
+        pub fn editor_focus(&mut self, focused: bool) -> i32 {
+            if !focused && self.editor_composing {
+                self.text_root.handle_text_event(TextEvent::Ime(Ime::Disabled));
+                self.editor_composing = false;
+            }
+            let id = if focused {
+                self.text_root.get_widget_with_tag(self.editor_tag).map(|area| area.id())
+            } else { None };
+            if focused && id.is_none() { return -1; }
+            if !self.text_root.focus_on(id) { return -1; }
+            if focused {
+                self.text_root.handle_text_event(TextEvent::Ime(Ime::Enabled));
+            }
+            let _ = self.text_root.redraw();
+            self.editor_focused()
+        }
+
+        fn editor_accepts(&self, text: &str) -> i32 {
+            if self.editor_focused() != 1 { return -1; }
+            if text.len() > 4096 { return -2; }
+            if self.editor_composing { return -3; }
+            1
+        }
+
+        // This full-value path is deliberately bounded. `reset_text`
+        // moves the Rust caret to the end; arbitrary selection/rich text is
+        // not yet a supported feature of this BrowserHost.
+        pub fn editor_replace(&mut self, text: &str) -> i32 {
+            let accepted = self.editor_accepts(text);
+            if accepted < 0 { return accepted; }
+            let tag = self.editor_tag;
+            self.text_root.edit_widget_with_tag(tag, |mut area| {
+                TextArea::reset_text(&mut area, text);
+            });
+            let _ = self.text_root.redraw();
+            self.editor_committed = self.editor_live_text();
+            1
+        }
+
+        pub fn editor_preedit(&mut self, text: &str) -> i32 {
+            let accepted = self.editor_accepts(text);
+            if accepted < 0 { return accepted; }
+            self.text_root.handle_text_event(TextEvent::Ime(
+                Ime::Preedit(text.to_owned(), None)
+            ));
+            self.editor_composing = true;
+            let _ = self.text_root.redraw();
+            1
+        }
+
+        pub fn editor_update_preedit(&mut self, text: &str) -> i32 {
+            if self.editor_focused() != 1 { return -1; }
+            if text.len() > 4096 { return -2; }
+            if !self.editor_composing { return -3; }
+            self.text_root.handle_text_event(TextEvent::Ime(
+                Ime::Preedit(text.to_owned(), None)
+            ));
+            let _ = self.text_root.redraw();
+            1
+        }
+
+        pub fn editor_commit(&mut self, text: &str) -> i32 {
+            if self.editor_focused() != 1 { return -1; }
+            if text.len() > 4096 { return -2; }
+            self.text_root.handle_text_event(TextEvent::Ime(
+                Ime::Commit(text.to_owned())
+            ));
+            self.editor_composing = false;
+            let _ = self.text_root.redraw();
+            self.editor_committed = self.editor_live_text();
+            self.editor_commits = self.editor_commits.saturating_add(1);
+            1
+        }
+
+        pub fn editor_cancel(&mut self) -> i32 {
+            if self.editor_focused() != 1 { return -1; }
+            self.text_root.handle_text_event(TextEvent::Ime(Ime::Disabled));
+            self.text_root.handle_text_event(TextEvent::Ime(Ime::Enabled));
+            self.editor_composing = false;
+            let _ = self.text_root.redraw();
+            1
+        }
+
         pub fn size(&self) -> (i32, i32) {
             let size = self.root.size();
             (size.width as i32, size.height as i32)
@@ -669,6 +808,75 @@ mod browser_host {
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_keyboard_event_count() -> i32 { get_i32(|h| h.keyboard_events) }
+
+    // R4d UTF-8 strings cross JS↔Rust using wasm-bindgen's checked
+    // string marshalling, not manual unsafe pointers or lossy u32 packing.
+    #[cfg(target_arch = "wasm32")]
+    #[allow(unsafe_code)]
+    #[wasm_bindgen]
+    pub fn mp_editor_replace(value: String) -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_replace(&value)).unwrap_or(-1))
+    }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(unsafe_code)]
+    #[wasm_bindgen]
+    pub fn mp_editor_preedit(value: String) -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_preedit(&value)).unwrap_or(-1))
+    }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(unsafe_code)]
+    #[wasm_bindgen]
+    pub fn mp_editor_update_preedit(value: String) -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_update_preedit(&value)).unwrap_or(-1))
+    }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(unsafe_code)]
+    #[wasm_bindgen]
+    pub fn mp_editor_commit(value: String) -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_commit(&value)).unwrap_or(-1))
+    }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(unsafe_code)]
+    #[wasm_bindgen]
+    pub fn mp_editor_committed_text() -> String {
+        HOST.with(|h| h.borrow().as_ref()
+            .map(|host| host.editor_committed.clone()).unwrap_or_default())
+    }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(unsafe_code)]
+    #[wasm_bindgen]
+    pub fn mp_editor_live_text() -> String {
+        HOST.with(|h| h.borrow().as_ref()
+            .map(|host| host.editor_live_text()).unwrap_or_default())
+    }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_focus(focused: i32) -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_focus(focused != 0)).unwrap_or(-1))
+    }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_focused() -> i32 { get_i32(|h| h.editor_focused()) }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_composing() -> i32 { get_i32(|h| i32::from(h.editor_composing)) }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_commits() -> i32 { get_i32(|h| h.editor_commits) }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_actions() -> i32 { get_i32(|h| h.editor_actions.get()) }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_cancel() -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_cancel()).unwrap_or(-1))
+    }
 
     // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
     #[allow(unsafe_code)]
@@ -953,6 +1161,46 @@ mod browser_host {
             assert!(h.rects.iter().any(|r|
                 r.rgba == Color::from_rgb8(70,120,210).to_rgba8().to_u32()),
                 "valid independent widgets must still be retained");
+        }
+
+        #[test]
+        fn r4d_real_masonry_textinput_unicode_preedit_commit_cancel() {
+            let mut h = BrowserHost::new(320, 360);
+            assert_eq!(h.editor_focused(), 0);
+            assert_eq!(h.editor_preedit("leak"), -1,
+                "unfocused TextInput must refuse IME");
+            assert_eq!(h.editor_focus(true), 1);
+            assert_eq!(h.editor_replace("Привет "), 1);
+            assert_eq!(h.editor_committed, "Привет ");
+            assert_eq!(h.editor_live_text(), "Привет ");
+            let clicks = h.clicks.get();
+            let commits = h.editor_commits;
+            assert_eq!(h.editor_preedit("に"), 1);
+            assert_eq!(h.editor_committed, "Привет ",
+                "IME preedit MUST NOT become committed document text");
+            assert_ne!(h.editor_live_text(), h.editor_committed,
+                "genuine Masonry TextArea must hold a visible preedit");
+            assert_eq!(h.editor_update_preedit("日本"), 1);
+            assert_eq!(h.editor_committed, "Привет ");
+            assert_eq!(h.editor_replace("wrong"), -3,
+                "full-value replacement while composing must fail closed");
+            assert_eq!(h.editor_commit("日本"), 1);
+            assert_eq!(h.editor_committed, "Привет 日本");
+            assert_eq!(h.editor_live_text(), "Привет 日本");
+            assert_eq!(h.editor_commits, commits + 1);
+            assert_eq!(h.editor_preedit("未確定"), 1);
+            assert_eq!(h.editor_cancel(), 1);
+            assert_eq!(h.editor_committed, "Привет 日本");
+            assert_eq!(h.editor_live_text(), "Привет 日本");
+            assert_eq!(h.editor_commit("🌍"), 1);
+            assert_eq!(h.editor_committed, "Привет 日本🌍");
+            assert_eq!(h.clicks.get(), clicks,
+                "text events must not leak to scene ButtonPress");
+            assert!(h.editor_actions.get() >= 2,
+                "genuine Masonry TextArea must emit TextAction events");
+            assert_eq!(h.editor_focus(false), 0);
+            assert_eq!(h.editor_commit("leak"), -1,
+                "blurred editor must refuse commits");
         }
 
         #[test]

@@ -20,7 +20,11 @@ const symbols=[
   'mp_semantic_button_id','mp_focus_button','mp_focused_button',
   'mp_keyboard_button','mp_keyboard_event_count',
   'mp_access_button_id','mp_access_button_disabled','mp_access_focus_id',
-  'mp_set_button_disabled','mp_set_button_present'
+  'mp_set_button_disabled','mp_set_button_present',
+  'mp_editor_focus','mp_editor_focused','mp_editor_composing',
+  'mp_editor_replace','mp_editor_preedit','mp_editor_update_preedit',
+  'mp_editor_commit','mp_editor_cancel','mp_editor_committed_text',
+  'mp_editor_live_text','mp_editor_commits','mp_editor_actions'
 ];
 for(const s of symbols)assert.equal(typeof e[s],'function','missing exported '+s);
 assert.equal(e.mp_version(),1);
@@ -184,4 +188,31 @@ const replacementId=e.mp_access_button_id();
 assert.ok(replacementId>0n&&replacementId!==originalId);
 assert.equal(e.mp_focus_button(1),1);
 assert.equal(e.mp_access_focus_id(),replacementId);
-console.log('PASS R4c real AccessKit node identity, disabled, removal, recreation and focus (Node WASM)');
+// R4d: these strings travel through the actual wasm-bindgen UTF-8 ABI,
+ // and are applied by a genuine upstream Masonry TextInput/TextArea.
+assert.equal(e.mp_editor_preedit('leak'),-1,'unfocused editor must refuse input');
+assert.equal(e.mp_editor_focus(1),1);
+assert.equal(e.mp_editor_replace('Привет '),1);
+assert.equal(e.mp_editor_committed_text(),'Привет ');
+const clicksBeforeIme=e.mp_click_count(),commitsBeforeIme=e.mp_editor_commits();
+assert.equal(e.mp_editor_preedit('に'),1);
+assert.equal(e.mp_editor_composing(),1);
+assert.equal(e.mp_editor_committed_text(),'Привет ',
+  'preedit was incorrectly persisted as committed text');
+assert.notEqual(e.mp_editor_live_text(),e.mp_editor_committed_text());
+assert.equal(e.mp_editor_update_preedit('日本'),1);
+assert.equal(e.mp_editor_replace('bad'),-3,'replacement during composition must be rejected');
+assert.equal(e.mp_editor_commit('日本'),1);
+assert.equal(e.mp_editor_committed_text(),'Привет 日本');
+assert.equal(e.mp_editor_commits(),commitsBeforeIme+1);
+assert.equal(e.mp_editor_preedit('未確定'),1);
+assert.equal(e.mp_editor_cancel(),1);
+assert.equal(e.mp_editor_committed_text(),'Привет 日本');
+assert.equal(e.mp_editor_live_text(),'Привет 日本');
+assert.equal(e.mp_editor_commit('🌍'),1);
+assert.equal(e.mp_editor_committed_text(),'Привет 日本🌍');
+assert.equal(e.mp_click_count(),clicksBeforeIme,'IME leaked into scene ButtonPress');
+assert.ok(e.mp_editor_actions()>=2,'missing genuine Masonry TextAction');
+assert.equal(e.mp_editor_focus(0),0);
+assert.equal(e.mp_editor_commit('leak'),-1);
+console.log('PASS R4d real TextInput Unicode/preedit/commit/cancel and R4c focus (Node WASM)');

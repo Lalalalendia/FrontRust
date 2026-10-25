@@ -4,9 +4,11 @@ const ctx=canvas.getContext('2d',{alpha:false});
 const el=id=>document.getElementById(id);
 const semanticAction=el('masonry-action');
 const inspector=el('masonry-inspector');
+const textEditor=el('masonry-text-editor');
 const actionAnchor=document.createComment('Rust AccessKit button projection');
 semanticAction.before(actionAnchor);
 let compositionActive=false;
+let editorCompositionActive=false;
 let suppressNativeKeyboardClick=false;
 let engine=null;
 let scheduled=false;
@@ -26,28 +28,33 @@ const required=[
   'mp_semantic_button_id','mp_focus_button','mp_focused_button',
   'mp_keyboard_button','mp_keyboard_event_count',
   'mp_access_button_id','mp_access_button_disabled','mp_access_focus_id',
-  'mp_set_button_disabled','mp_set_button_present'
+  'mp_set_button_disabled','mp_set_button_present',
+  'mp_editor_focus','mp_editor_focused','mp_editor_composing',
+  'mp_editor_replace','mp_editor_preedit','mp_editor_update_preedit',
+  'mp_editor_commit','mp_editor_cancel','mp_editor_committed_text',
+  'mp_editor_live_text','mp_editor_commits','mp_editor_actions'
 ];
 
 
 function focusOwner(){
   // Never treat visual DOM nodes as semantic owners. Only the projection
   // button or a real editor input can own keyboard interpretation.
-  if(compositionActive)return 'composition';
+  if(compositionActive||editorCompositionActive)return 'composition';
   if(document.activeElement===semanticAction)return 'scene';
   if(document.activeElement===inspector)return 'inspector';
+  if(document.activeElement===textEditor)return 'editor';
   return 'none';
 }
 function updateFocusLabels(){
   el('focus-owner').textContent='Фокус: '+focusOwner();
-  el('composition-state').textContent='IME: '+(compositionActive?'композиция':'неактивна');
+  el('composition-state').textContent='IME: '+(compositionActive||editorCompositionActive?'композиция':'неактивна');
 }
 function handleSceneKey(event){
   if(event.key!=='Enter'&&event.key!==' ')return;
   // Suppress browser auto-click for the projected DOM button; the actual
   // ButtonPress must always come from Rust/Masonry TextEvent.
   event.preventDefault();
-  if(compositionActive||event.isComposing||event.ctrlKey||event.metaKey||event.altKey)return;
+  if(compositionActive||editorCompositionActive||event.isComposing||event.ctrlKey||event.metaKey||event.altKey)return;
   if(document.activeElement!==semanticAction)return;
   if(engine.mp_focused_button()!==1)throw Error('Scene key with no Rust focus');
   const code=event.key==='Enter'?1:2;
@@ -110,7 +117,13 @@ function snapshot(){
     accessFocusId:String(engine.mp_access_focus_id()),
     focusedButton:engine.mp_focused_button(),
     keyboardEvents:engine.mp_keyboard_event_count(),
-    composing:compositionActive,owner:focusOwner()};
+    editorCommitted:engine.mp_editor_committed_text(),
+    editorLive:engine.mp_editor_live_text(),
+    editorFocused:engine.mp_editor_focused(),
+    editorComposing:engine.mp_editor_composing(),
+    editorCommits:engine.mp_editor_commits(),
+    editorActions:engine.mp_editor_actions(),
+    composing:compositionActive||editorCompositionActive,owner:focusOwner()};
 }
 function validateScene(scene){
   // Refuse incomplete snapshots BEFORE changing the displayed framebuffer.
@@ -151,11 +164,22 @@ function syncAccessProjection(scene){
     ?'Удалить кнопку Rust':'Вернуть кнопку Rust';
   updateFocusLabels();
 }
+function syncTextProjection(scene){
+  // Browser native input provides selection/IME affordance, but only the
+  // genuine Rust/Masonry TextArea is the accepted document text state.
+  el('rust-editor-committed').textContent=scene.editorCommitted;
+  el('rust-editor-live').textContent=scene.editorLive;
+  el('rust-editor-commits').textContent=String(scene.editorCommits);
+  if(!editorCompositionActive && textEditor.value!==scene.editorCommitted){
+    textEditor.value=scene.editorCommitted;
+  }
+}
 function paint(){
   scheduled=false;
   const scene=snapshot();
   validateScene(scene);
   syncAccessProjection(scene);
+  syncTextProjection(scene);
   ctx.fillStyle='#f8fbff';
   ctx.fillRect(0,0,canvas.width,canvas.height);
   // The scene is an ORDERED command stream. A clip is an actual Canvas
@@ -285,6 +309,49 @@ try{
       throw Error('Rust refused projected DOM activation');
     requestPaint();
   });
+  textEditor.addEventListener('focus',()=>{
+    if(engine.mp_editor_focus(1)!==1)throw Error('Masonry TextArea focus refused');
+    updateFocusLabels();requestPaint();
+  });
+  textEditor.addEventListener('blur',()=>{
+    if(editorCompositionActive){
+      if(engine.mp_editor_cancel()!==1)throw Error('Masonry composition cancel refused');
+      editorCompositionActive=false;
+    }
+    engine.mp_editor_focus(0);updateFocusLabels();requestPaint();
+  });
+  textEditor.addEventListener('compositionstart',()=>{
+    if(engine.mp_editor_focused()!==1)throw Error('IME with no Rust TextArea focus');
+    editorCompositionActive=true;
+    if(engine.mp_editor_preedit('')!==1)throw Error('Masonry IME start refused');
+    updateFocusLabels();requestPaint();
+  });
+  textEditor.addEventListener('compositionupdate',event=>{
+    if(!editorCompositionActive)return;
+    if(engine.mp_editor_update_preedit(event.data||'')!==1)
+      throw Error('Masonry IME preedit refused');
+    requestPaint();
+  });
+  textEditor.addEventListener('compositionend',event=>{
+    if(!editorCompositionActive)return;
+    editorCompositionActive=false;
+    const result=event.data
+      ?engine.mp_editor_commit(event.data)
+      :engine.mp_editor_cancel();
+    if(result!==1)throw Error('Masonry IME commit/cancel refused');
+    updateFocusLabels();requestPaint();
+  });
+  textEditor.addEventListener('input',event=>{
+    if(editorCompositionActive||event.isComposing||event.inputType==='insertCompositionText')
+      return;
+    // Browser vendors can emit a final input AFTER compositionend; if the
+    // value already matches Rust's commit, it is never committed twice.
+    if(textEditor.value!==engine.mp_editor_committed_text()){
+      if(engine.mp_editor_replace(textEditor.value)!==1)
+        throw Error('Masonry text full-value reconciliation refused');
+    }
+    requestPaint();
+  });
   inspector.addEventListener('focus',updateFocusLabels);
   inspector.addEventListener('blur',updateFocusLabels);
   inspector.addEventListener('compositionstart',()=>{
@@ -323,7 +390,7 @@ try{
   updateFocusLabels();
   window.__masonryProbe={
     snapshot,resize,validateScene,focusOwner,setButtonDisabled,setButtonPresent,
-    get composing(){return compositionActive},
+    get composing(){return compositionActive||editorCompositionActive},
     get lastSnapshot(){return lastSnapshot}
   };
 }catch(err){

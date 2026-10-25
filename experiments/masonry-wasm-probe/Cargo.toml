@@ -15,6 +15,9 @@ default = []
 widgets = ["dep:masonry"]
 native-host = ["dep:masonry_winit"]
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.129"
+
 [dependencies]
 masonry_core = { git = "https://github.com/linebender/xilem", rev = "271a27a6d4a930f7878d404f9014e3c50a3a9b88", default-features = false }
 masonry = { git = "https://github.com/linebender/xilem", rev = "271a27a6d4a930f7878d404f9014e3c50a3a9b88", default-features = false, optional = true }

@@ -110,3 +110,12 @@ This remains a narrowly verified scene subset, not guaranteed SVG, CSS or publis
 - An actual `Flex` child can be disabled, removed (replaced with an inert spacer) and recreated via `RenderRoot::edit_widget_with_tag`. A removed node loses its DOM control and a recreated Rust widget gets a new ID. The DOM focus is moved to the inspector when a focused Rust control is disabled/removed.
 - Native Rust, real Node/WASM ABI, Chromium and Firefox must test the full lifecycle plus preserved pointer/key/IME-fence and R3b paint behavior; no mock establishes acceptance.
 - **Boundary:** this is a dynamically synchronized **single tagged Button** projection, not a general AccessKit-to-DOM tree. Labels still belong to the demo HTML host; arbitrary roles, parent/child order, screen-reader AT, OS IME and WCAG remain unverified.
+
+
+## R4d — real Masonry TextInput + bounded browser Unicode/IME bridge
+
+- A second genuine `RenderRoot` owns upstream `TextInput` wrapping a tagged editable `TextArea<true>`. This isolates unsupported glyph drawing from the bounded R3b Canvas2D serializer: text is displayed by a native accessible HTML input, but the accepted text model is Rust.
+- JS→WASM strings cross through **pinned wasm-bindgen 0.2.129**, never raw pointers or lossy numeric character codes. Rust rejects operations without text focus, over 4096 UTF-8 bytes, or full-value replacement during active composition.
+- DOM `input` events reconcile a bounded full-value text snapshot with the real `TextArea::reset_text`. Browser composition start/update/end is delivered to `RenderRoot::handle_text_event(TextEvent::Ime(Preedit/Commit/Disabled))`; in Rust, `TextAction::Changed` is NOT automatically durable, because preedit may emit it. Only explicit accepted commit/replacement updates the committed projection.
+- Native Rust, real Node/WASM, Chromium and Firefox acceptance gates verify UTF-8 Cyrillic, Japanese preedit/commit/cancel, emoji, focus isolation, commit-once counter, and the preserved R3b/R4c scene checks. Synthetic composition events prove only the event-routing contract; native browser text input proves normal Unicode typing, NOT operating-system Japanese IME.
+- **Explicitly unsupported:** cursor/selection parity for arbitrary mid-string edits (Masonry `reset_text` resets the caret), generic AccessKit text subtree, rich text, glyph renderer parity, actual operating-system IME/screen-reader certification. Treat this as an experimental text ingress gate, not production text-editing.
