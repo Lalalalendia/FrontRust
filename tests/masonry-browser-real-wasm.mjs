@@ -23,6 +23,7 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     const first=await page.evaluate(()=>window.__masonryProbe.snapshot());
     assert.equal(first.engine,'Rust/Masonry/RenderRoot');
     assert.ok(first.layers>0);
+    assert.equal(first.height,360,'full R3b Masonry scene must not be clipped by a 240px host');
     assert.ok(first.accessNodes>0);
     assert.ok(first.rects.length>=3);
     assert.equal(first.skippedDraws,0,'unsupported operations must fail the fidelity gate');
@@ -101,6 +102,8 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     const midX=(initial[0]+following[0])/2, midY=(initial[1]+following[1])/2;
     const [a,b,c,d,e,f]=magenta.matrix;
     const rendered={x:a*midX+c*midY+e,y:b*midX+d*midY+f};
+    assert.ok(rendered.y>2&&rendered.y<first.height-2,
+      'Real rotated DisclosureButton midpoint falls outside the host viewport');
     const samples=await page.evaluate(({x,y})=>{
       const ctx=document.querySelector('#masonry-canvas').getContext('2d');
       const out=[];
@@ -135,6 +138,11 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
       return {r,local,position:{x:a*local.x+c*local.y+e,y:b*local.x+d*local.y+f}};
     };
     const quad=getBezier([10,215,235],3),cubic=getBezier([240,165,45],4);
+    for(const curve of [quad,cubic]){
+      assert.ok(curve.position.x>2&&curve.position.x<first.width-2
+        &&curve.position.y>2&&curve.position.y<first.height-2,
+        'Real Bezier midpoint lies outside the 320x360 host viewport');
+    }
     assert.ok(Math.abs(quad.local.x-55)<0.001&&Math.abs(quad.local.y-30)<0.001);
     assert.ok(Math.abs(cubic.local.x-55.25)<0.001&&Math.abs(cubic.local.y-14.5)<0.001);
     const pixelProbes=await page.evaluate(({positions,offCurve})=>{

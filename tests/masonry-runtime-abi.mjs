@@ -20,7 +20,7 @@ const symbols=[
 ];
 for(const s of symbols)assert.equal(typeof e[s],'function','missing exported '+s);
 assert.equal(e.mp_version(),1);
-assert.ok(e.mp_init(320,240)>=2,'real RenderRoot must emit filled shapes');
+assert.ok(e.mp_init(320,360)>=2,'real RenderRoot must emit filled shapes');
 assert.ok(e.mp_layer_count()>0,'RenderRoot must emit VisualLayerPlan');
 assert.ok(e.mp_access_nodes()>0,'real AccessKit tree must be nonempty');
 const getRects=()=>Array.from({length:e.mp_rect_count()},(_,i)=>({

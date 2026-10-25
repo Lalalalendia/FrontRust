@@ -738,7 +738,7 @@ mod browser_host {
 
         #[test]
         fn real_renderroot_rejects_oversized_path_without_drawing_it() {
-            let mut h = BrowserHost::new(320,240);
+            let mut h = BrowserHost::new(320,360);
             assert_eq!(h.skipped_draws,0);
             h.inject_oversized_path_for_fidelity_test();
             assert!(h.skipped_draws > 0,"missing unsupported-path diagnostic");
@@ -752,7 +752,7 @@ mod browser_host {
 
         #[test]
         fn headless_renderroot_two_widgets_and_resize() {
-            let mut h = BrowserHost::new(320, 240);
+            let mut h = BrowserHost::new(320, 360);
             assert!(h.scene_layers > 0);
             assert!(h.rects.len() >= 2);
             assert!(h.accessibility_nodes > 0);

@@ -77,7 +77,7 @@ and that unsupported operation count remains zero.
 
 ## R3b — QuadTo/CurveTo pixel conformance and fail-closed validation
 
-Two separate actual Rust `kurbo::BezPath` strokes are stored through upstream `Canvas::update_scene` and replayed by real Masonry `RenderRoot`: cyan `quad_to((55,0),(102,60))` and amber `curve_to((30,-4),(80,-4),(104,70))`. The `Canvas` occupies the right-hand 120×80 part of a Masonry `Flex::row` beside the existing transformed `DisclosureButton`, within the original 320×240 WASM framebuffer.
+Two separate actual Rust `kurbo::BezPath` strokes are stored through upstream `Canvas::update_scene` and replayed by real Masonry `RenderRoot`: cyan `quad_to((55,0),(102,60))` and amber `curve_to((30,-4),(80,-4),(104,70))`. The `Canvas` occupies the right-hand 120×80 part of a Masonry `Flex::row` beside the existing transformed `DisclosureButton`, within the 320×360 WASM framebuffer (increased to show the full scene).
 
 Native Rust and Node independently assert the numeric `PathEl` payloads and curve colors. Chromium and Firefox compute a quadratic/cubic Bernstein midpoint from the transported control points, sample 5×5 neighborhoods at those transformed coordinates, and verify off-curve pixels do *not* match the stroke colors. Merely exporting a Path opcode does not pass.
 

@@ -186,7 +186,7 @@ try{
     engine.mp_pointer(0,p.x,p.y);
     requestPaint();
   });
-  el('resize').addEventListener('click',()=>resize(canvas.width===320?400:320,canvas.height===240?300:240));
+  el('resize').addEventListener('click',()=>resize(canvas.width===320?400:320,canvas.height===360?300:360));
   requestPaint();
   el('status').textContent='Real Rust/WASM RenderRoot';
   // Exposed only for deterministic browser harness assertions.
