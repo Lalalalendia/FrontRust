@@ -27,6 +27,7 @@ mod browser_host {
     use masonry::kurbo::{Affine, BezPath, Cap, Join, PathEl, Point, Shape as _, Stroke, Vec2};
     use masonry::layout::{AsUnit, Length};
     use masonry::peniko::{Blob, Brush, Color, Fill};
+    use masonry::parley::style::{FontFamily, FontFamilyName, StyleProperty};
     use masonry::properties::{Background, BorderColor, BorderWidth, ContentColor, CornerRadius, Dimensions};
     use masonry::theme::default_property_set;
     use masonry::ui_events::keyboard::{Key, Modifiers, NamedKey};
@@ -288,8 +289,17 @@ mod browser_host {
             let editor_tag: WidgetTag<TextArea<true>> = WidgetTag::named("frontrust-r4d-editor");
             let editor_actions = Rc::new(Cell::new(0_i32));
             let count_actions = Rc::clone(&editor_actions);
+            // RenderRootOptions.test_font only appends the fixture to the
+            // Latin fallback chain. Cyrillic, Han and emoji need an explicit
+            // family or Parley may snap their byte-index cursors to EOF.
+            // Font family matches name ID 1 in r4e-layout-font.hex.
+            let editor = TextArea::new_editable("").with_style(
+                StyleProperty::FontFamily(FontFamily::Single(
+                    FontFamilyName::Named("FrontRust Layout Fixture".into()),
+                )),
+            );
             let text_widget = NewWidget::new(TextInput::from_text_area(
-                NewWidget::new(TextArea::new_editable("")).with_tag(editor_tag)
+                NewWidget::new(editor).with_tag(editor_tag)
             ));
             let mut text_root = RenderRoot::new(
                 text_widget,
