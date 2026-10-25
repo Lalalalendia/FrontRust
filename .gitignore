@@ -7,3 +7,4 @@
 /experiments/masonry-wasm-probe/demo/*.wasm
 *.log
 __pycache__/
+/experiments/masonry-wasm-probe/demo/gen/

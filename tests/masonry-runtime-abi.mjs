@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 
-const path=process.argv[2]||'experiments/masonry-wasm-probe/target/wasm32-unknown-unknown/release/frontrust_masonry_wasm_probe.wasm';
-const moduleBytes=await readFile(path);
-const {instance}=await WebAssembly.instantiate(moduleBytes,{});
-const e=instance.exports;
+const {default:initWasm}=await import('../experiments/masonry-wasm-probe/demo/gen/masonry_probe.js');
+const path=process.argv[2]||'experiments/masonry-wasm-probe/demo/gen/masonry_probe_bg.wasm';
+const bytes=await readFile(path);
+// Pass bytes directly: no fetch is required by wasm-bindgen in Node.
+const e=await initWasm(bytes);
 const symbols=[
   'mp_version','mp_init','mp_resize','mp_pointer','mp_rect_count',
   'mp_rect_x','mp_rect_y','mp_rect_width','mp_rect_height','mp_rect_rgba',

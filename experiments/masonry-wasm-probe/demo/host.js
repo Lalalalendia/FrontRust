@@ -1,3 +1,4 @@
+import initWasm from './gen/masonry_probe.js';
 const canvas=document.querySelector('#masonry-canvas');
 const ctx=canvas.getContext('2d',{alpha:false});
 const el=id=>document.getElementById(id);
@@ -58,10 +59,8 @@ function resize(width,height){
   requestPaint();
 }
 try{
-  const response=await fetch('./masonry_probe.wasm',{cache:'no-store'});
-  if(!response.ok)throw Error('Cannot fetch compiled Masonry WASM (HTTP '+response.status+')');
-  const {instance}=await WebAssembly.instantiateStreaming(response,{});
-  engine=instance.exports;
+  // Transitive wasm-bindgen imports require the generated JS glue; never instantiate raw bytes.
+  engine=await initWasm();
   for(const name of required)if(typeof engine[name]!=='function')throw Error('Missing Masonry WASM ABI: '+name);
   if(engine.mp_version()!==1)throw Error('Unknown Masonry ABI revision');
   if(engine.mp_init(canvas.width,canvas.height)<2)throw Error('No real Masonry fills found');

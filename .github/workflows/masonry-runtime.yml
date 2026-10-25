@@ -33,6 +33,17 @@ jobs:
         run: cargo test --features widgets --manifest-path experiments/masonry-wasm-probe/Cargo.toml
       - name: Build actual Masonry browser WASM module
         run: cargo build --release --target wasm32-unknown-unknown --features widgets --manifest-path experiments/masonry-wasm-probe/Cargo.toml
+      - name: Install matching wasm-bindgen CLI
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.129 --locked
+          wasm-bindgen --version
+      - name: Generate wasm-bindgen browser and Node glue
+        run: |
+          wasm-bindgen --target web --out-name masonry_probe \
+            --out-dir experiments/masonry-wasm-probe/demo/gen \
+            experiments/masonry-wasm-probe/target/wasm32-unknown-unknown/release/frontrust_masonry_wasm_probe.wasm
+          test -s experiments/masonry-wasm-probe/demo/gen/masonry_probe.js
+          test -s experiments/masonry-wasm-probe/demo/gen/masonry_probe_bg.wasm
       - name: Execute real wasm32 RenderRoot + event ABI with Node
         run: node tests/masonry-runtime-abi.mjs
       - name: Install Chromium/Firefox browser test environment
@@ -43,7 +54,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp experiments/masonry-wasm-probe/target/wasm32-unknown-unknown/release/frontrust_masonry_wasm_probe.wasm experiments/masonry-wasm-probe/demo/masonry_probe.wasm
           python3 -m http.server 8792 --bind 127.0.0.1 --directory experiments/masonry-wasm-probe/demo > /tmp/masonry-browser-host.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
@@ -61,5 +71,8 @@ jobs:
         if: always()
         with:
           name: masonry-real-wasm
-          path: experiments/masonry-wasm-probe/target/wasm32-unknown-unknown/release/frontrust_masonry_wasm_probe.wasm
+          path: |
+            experiments/masonry-wasm-probe/target/wasm32-unknown-unknown/release/frontrust_masonry_wasm_probe.wasm
+            experiments/masonry-wasm-probe/demo/gen/masonry_probe.js
+            experiments/masonry-wasm-probe/demo/gen/masonry_probe_bg.wasm
           if-no-files-found: ignore
