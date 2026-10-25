@@ -1,0 +1,63 @@
+name: Experimental Masonry wasm32 compatibility
+on:
+  push:
+    branches: [main, 'feat/**']
+    paths:
+      - 'experiments/masonry-wasm-probe/**'
+      - '.github/workflows/masonry-probe.yml'
+  pull_request:
+    paths:
+      - 'experiments/masonry-wasm-probe/**'
+      - '.github/workflows/masonry-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compile-targets:
+    name: Pinned Masonry wasm32 compile — ${{ matrix.probe }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        probe: [core, widgets, native-host]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Compile exact upstream revision
+        id: compile
+        continue-on-error: true
+        env:
+          PROBE: ${{ matrix.probe }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PROBE" in
+            core) cargo check --target wasm32-unknown-unknown --manifest-path experiments/masonry-wasm-probe/Cargo.toml ;;
+            widgets) cargo check --target wasm32-unknown-unknown --features widgets --manifest-path experiments/masonry-wasm-probe/Cargo.toml ;;
+            native-host) cargo check --target wasm32-unknown-unknown --features native-host --manifest-path experiments/masonry-wasm-probe/Cargo.toml ;;
+            *) exit 2 ;;
+          esac 2>&1 | tee "masonry-$PROBE.log"
+      - name: Record actual outcome, gate Core/Widgets only
+        if: always()
+        env:
+          PROBE: ${{ matrix.probe }}
+          COMPILE_OUTCOME: ${{ steps.compile.outcome }}
+        shell: bash
+        run: |
+          echo "Pinned Xilem revision: 271a27a6d4a930f7878d404f9014e3c50a3a9b88" >> "$GITHUB_STEP_SUMMARY"
+          echo "Probe $PROBE: cargo check $COMPILE_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$PROBE" = "native-host" ]; then
+            echo "Native host is an independent upstream falsifier, never a requirement for BrowserHost." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$COMPILE_OUTCOME" != "success" ]; then
+            echo "Core/widgets wasm32 compatibility failed, see raw Cargo diagnostics." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: masonry-wasm-${{ matrix.probe }}-diagnostics
+          path: masonry-${{ matrix.probe }}.log
+          if-no-files-found: ignore

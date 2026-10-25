@@ -1,0 +1,21 @@
+[package]
+name = "frontrust-masonry-wasm-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+resolver = "2"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = []
+widgets = ["dep:masonry"]
+native-host = ["dep:masonry_winit"]
+
+[dependencies]
+masonry_core = { git = "https://github.com/linebender/xilem", rev = "271a27a6d4a930f7878d404f9014e3c50a3a9b88", default-features = false }
+masonry = { git = "https://github.com/linebender/xilem", rev = "271a27a6d4a930f7878d404f9014e3c50a3a9b88", default-features = false, optional = true }
+masonry_winit = { git = "https://github.com/linebender/xilem", rev = "271a27a6d4a930f7878d404f9014e3c50a3a9b88", default-features = false, optional = true }

@@ -2,5 +2,7 @@
 /dist/*.wasm
 /node_modules/
 /test-results/
+/experiments/masonry-wasm-probe/target/
+/experiments/masonry-wasm-probe/Cargo.lock
 *.log
 __pycache__/
