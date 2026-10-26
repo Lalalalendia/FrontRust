@@ -27,6 +27,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Browser E2E harness syntax preflight
+        run: node --check tests/masonry-browser-real-wasm.mjs && node --check tests/masonry-runtime-abi.mjs && node --check experiments/masonry-wasm-probe/demo/host.js
       - name: Install headless native fontconfig
         run: sudo apt-get update -qq && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev pkg-config
       - name: Verify licensed OpenType fixture integrity

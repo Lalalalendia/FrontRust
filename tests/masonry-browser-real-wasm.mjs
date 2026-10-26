@@ -78,11 +78,11 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     await page.locator('#demo-cjk').click();
     assert.match(await page.locator('#demo-font-result').textContent(),
       /REJECT/, 'missing CJK coverage must be visible to users');
-    const rejected=await page.evaluate(()=>window.__masonryProbe.snapshot());
-    assert.equal(rejected.demoText,'Rust','unsupported CJK changed accepted text');
-    assert.equal(rejected.demoFontId,2);
-    assert.equal(rejected.outlinedGlyphs,4);
-    assert.equal(rejected.skippedDraws,0);
+    const fontRefusal=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(fontRefusal.demoText,'Rust','unsupported CJK changed accepted text');
+    assert.equal(fontRefusal.demoFontId,2);
+    assert.equal(fontRefusal.outlinedGlyphs,4);
+    assert.equal(fontRefusal.skippedDraws,0);
     await page.locator('#demo-cyrillic').click();
     await page.waitForFunction(()=>
       window.__masonryProbe.snapshot().demoFontId===1);
