@@ -189,6 +189,15 @@ mod browser_host {
         Some(records)
     }
 
+    // Real, license-respecting Latin/Cyrillic contour fixture:
+    // six Lato Regular glyphs, fonttools subset and renamed family under OFL.
+    // This is genuine typography, but deliberately NOT a complete font set.
+    fn r5a_real_cyrillic_font() -> Blob<u8> {
+        Blob::new(Arc::new(
+            include_bytes!("../fixtures/r5a-cyrillic-real.ttf").to_vec()
+        ))
+    }
+
     // The pinned Parley TextArea needs glyph clusters to turn UTF-8 byte
     // offsets into cursors. Without ANY font, select_byte_range silently
     // snaps both cursors to EOF: the next paste appends instead of replacing.
@@ -310,7 +319,7 @@ mod browser_host {
                     NewWidget::new(
                         Label::new("Привет")
                             .with_style(StyleProperty::FontFamily(FontFamily::Single(
-                                FontFamilyName::Named("FrontRust Layout Fixture".into())
+                                FontFamilyName::Named("FrontRust Demo Subset".into())
                             )))
                             .with_hint(false)
                     ).with_props(PropertySet::one(
@@ -335,7 +344,7 @@ mod browser_host {
                     size_policy: WindowSizePolicy::User,
                     size: PhysicalSize::new(width.clamp(160, 1600), height.clamp(120, 1200)),
                     scale_factor: 1.0,
-                    test_font: Some(r4e_layout_font()),
+                    test_font: Some(r5a_real_cyrillic_font()),
                 },
             );
             // Transform only this existing Rust widget, never the Canvas JS shape.
