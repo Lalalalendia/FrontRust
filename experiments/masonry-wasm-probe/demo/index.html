@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>FrontRust · Masonry RenderRoot в WASM</title>
+  <style>
+    :root{color-scheme:dark;font-family:system-ui,sans-serif;background:#0c1425;color:#e6eeff}
+    *{box-sizing:border-box}body{margin:0;padding:24px}
+    main{max-width:980px;margin:auto}
+    .eyebrow{color:#9bb7f3;font-size:12px;letter-spacing:.12em}
+    h1{font-size:clamp(28px,5vw,44px);margin:10px 0}
+    p{line-height:1.6;color:#aebed7}
+    .layout{display:flex;flex-wrap:wrap;gap:25px;align-items:flex-start}
+    .surface{padding:14px;background:#101e33;border:1px solid #43577d;border-radius:14px}
+    canvas{display:block;background:#f8fbff;max-width:100%;cursor:pointer;touch-action:none}
+    button:focus-visible,input:focus-visible{outline:3px solid #ffce63;outline-offset:3px}
+    .semantic-controls{display:flex;flex-direction:column;align-items:stretch;gap:9px;margin:16px 0}
+    .semantic-controls label{font-size:13px;color:#cad9f5}
+    .semantic-controls input{background:#0e1a2d;color:#e6eeff;border:1px solid #6783af;padding:10px;border-radius:8px}
+    .semantic-controls .meta{font-size:12px;color:#c1d4f2}
+    .panel{flex:1;min-width:240px;padding:18px;background:#172843;border-radius:14px}
+    .label{font-size:12px;color:#97afd3}.value{font-size:19px;margin:4px 0 16px}
+    button{background:#3863bb;border:0;border-radius:9px;color:white;padding:10px 14px;cursor:pointer}
+    #status{color:#b7dbb6}.warn{color:#eac18c;font-size:12px}
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">FRONTRUST / EXPERIMENTAL RENDERER</div>
+  <h1>Masonry в браузере</h1>
+  <p>Набор реальных виджетов, <code>RenderRoot</code> и графические команды из Rust/WASM. Canvas2D отображает реальные Masonry-примитивы: заливки, контуры, два вложенных клипа, повёрнутую стрелку, две кривые QuadTo/CurveTo и ограниченный векторный вывод настоящих GlyphRun из Rust. Слова «Привет» и «Rust» выбираются по полному покрытию cmap двух лицензированных Lato TTF-поднаборов. Неизвестные или смешанные строки отклоняются без подмены «.notdef». Это ещё не поместное fallback-переключение отдельных глифов, полноценный font manager, CJK/emoji, композитные группы и градиенты.</p>
+  <div class="layout">
+    <section class="surface" aria-label="Masonry Canvas2D">
+      <canvas id="masonry-canvas" width="320" height="360" aria-hidden="true"></canvas>
+    </section>
+    <section class="panel">
+      <div class="label">WASM engine</div><div class="value" id="status" role="status">Загрузка…</div>
+      <div class="label">Scene layers</div><div class="value" id="layers">—</div>
+      <div class="label">Painted rectangles</div><div class="value" id="rectangles">—</div>
+      <div class="label">AccessKit nodes</div><div class="value" id="access">—</div>
+      <div class="label">Real Masonry glyph runs / outlined paths</div><div class="value" id="glyph-runs">—</div>
+      <div class="label">Шрифт сцены (R5b)</div><div class="value" id="demo-current">Привет / family #1</div>
+      <div class="label">Rust ButtonPress count</div><div class="value" id="clicks">0</div>
+      <div class="semantic-controls" role="group" aria-label="Семантические элементы сцены и инспектора">
+        <button type="button" id="masonry-action" data-semantic-id="pending">Активировать кнопку Masonry</button>
+        <label for="masonry-inspector">Поле инспектора (клавиши остаются в тексте)</label>
+        <input id="masonry-inspector" type="text" autocomplete="off" placeholder="Текст / IME">
+        <label for="masonry-text-editor">Masonry TextInput (R4d: браузерный ввод → Rust TextArea)</label>
+        <input id="masonry-text-editor" type="text" autocomplete="off" spellcheck="false" placeholder="Привет / 日本 / 🌍">
+        <span class="meta">Rust committed: <output id="rust-editor-committed"></output></span>
+        <span class="meta">Rust preview (selection-aware preedit): <output id="rust-editor-live"></output></span>
+        <span class="meta">Rust IME commits: <output id="rust-editor-commits">0</output></span>
+        <span class="meta">Undo / Redo: <output id="rust-editor-undo-depth">0</output> / <output id="rust-editor-redo-depth">0</output> (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z)</span>
+        <span class="meta" id="focus-owner">Фокус: вне сцены</span>
+        <span class="meta" id="composition-state">IME: неактивна</span>
+        <label>Проверка реального шрифта и покрытия glyph cmap (R5b)</label>
+        <button type="button" id="demo-latin">Latin: Rust</button>
+        <button type="button" id="demo-cyrillic">Кириллица: Привет</button>
+        <button type="button" id="demo-cjk">Нет CJK: 日本 (отклонить)</button>
+        <span class="meta" id="demo-font-result" role="status">Проверка шрифта</span>
+        <button type="button" id="toggle-disabled">Отключить кнопку Rust</button>
+        <button type="button" id="toggle-present">Удалить кнопку Rust</button>
+      </div>
+      <button type="button" id="resize">Проверить resize (400 × 300)</button>
+      <p class="warn">Экспериментальный renderer: real RoundedRect и Affine. Есть Stroke (сплошной, без штриховки) и Clip (прямоугольный). Bezier-пути поддерживаются. В R4c DOM-кнопка проецирует реальный AccessKit NodeId/disabled/focus. R4d проверяет отдельный настоящий Masonry TextInput, UTF-8 и разделение IME preedit/commit в Rust; браузерный input является нативным текстовым адаптером (с ограниченными UTF-8 selection, undo/redo и IME-транзакциями). Универсальная AccessKit→DOM проекция, системный IME в виджете Rust, полный конвейер шрифтов, CJK fallback, цветные глифы, gradient и изображения пока не поддерживаются.</p>
+    </section>
+  </div>
+</main>
+<script type="module" src="./host.js"></script>
+</body>
+</html>

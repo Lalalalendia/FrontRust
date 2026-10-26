@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import vm from 'node:vm';
+const source=await readFile('web/mock-engine.js','utf8');
+const sandbox={};sandbox.globalThis=sandbox;vm.runInNewContext(source,sandbox);
+const e=sandbox.__uiPlatformMockEngine;
+assert.equal(e.uip_version(),1);
+assert.equal(e.uip_move_to(170,140),0);
+assert.equal(e.uip_select_at(200,180),1);
+assert.equal(e.uip_document_revision(),0);
+assert.equal(e.uip_move_to(180,130),2);
+assert.equal(e.uip_get_x(),180);
+assert.equal(e.uip_undo(),2);
+assert.equal(e.uip_get_x(),160);
+console.log('PASS JS mock contract only');
