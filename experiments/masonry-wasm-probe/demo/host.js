@@ -11,6 +11,8 @@ let compositionActive=false;
 let editorCompositionActive=false;
 let beforeEditorInput=null;
 let editorCompositionCaret=null;
+let editorStableSelection=null;
+let editorLastNoncollapsedSelection=null;
 const encoder=new TextEncoder();
 function utf8Length(text){return encoder.encode(text).length;}
 function utf16ByteOffset(text,offset){
@@ -61,7 +63,8 @@ const required=[
   'mp_editor_replace','mp_editor_preedit','mp_editor_update_preedit',
   'mp_editor_commit','mp_editor_cancel','mp_editor_committed_text',
   'mp_editor_live_text','mp_editor_commits','mp_editor_actions',
-  'mp_editor_select_range','mp_editor_splice'
+  'mp_editor_select_range','mp_editor_splice',
+  'mp_editor_begin_composition','mp_editor_commit_selection'
 ];
 
 
@@ -152,6 +155,10 @@ function snapshot(){
     editorComposing:engine.mp_editor_composing(),
     editorCommits:engine.mp_editor_commits(),
     editorActions:engine.mp_editor_actions(),
+    editorSelectionBytes:editorStableSelection?{
+      start:utf16ByteOffset(editorStableSelection.source,editorStableSelection.start),
+      end:utf16ByteOffset(editorStableSelection.source,editorStableSelection.end)
+    }:null,
     composing:compositionActive||editorCompositionActive,owner:focusOwner()};
 }
 function validateScene(scene){
@@ -361,6 +368,8 @@ try{
     const end=utf16ByteOffset(source,textEditor.selectionEnd);
     if(engine.mp_editor_select_range(start,end)!==1)
       throw Error('Rust TextArea rejected the browser selection');
+    editorStableSelection={source,start:textEditor.selectionStart,end:textEditor.selectionEnd};
+    if(start!==end)editorLastNoncollapsedSelection=editorStableSelection;
   }
   textEditor.addEventListener('focus',()=>{
     if(engine.mp_editor_focus(1)!==1)throw Error('Masonry TextArea focus refused');
@@ -368,8 +377,13 @@ try{
     updateFocusLabels();requestPaint();
   });
   textEditor.addEventListener('select',syncEditorSelection);
-  textEditor.addEventListener('keyup',syncEditorSelection);
-  textEditor.addEventListener('pointerup',syncEditorSelection);
+  const explicitCaretMove=()=>{
+    syncEditorSelection();
+    if(editorStableSelection?.start===editorStableSelection?.end)
+      editorLastNoncollapsedSelection=null;
+  };
+  textEditor.addEventListener('keyup',explicitCaretMove);
+  textEditor.addEventListener('pointerup',explicitCaretMove);
   textEditor.addEventListener('beforeinput',event=>{
     if(editorCompositionActive||event.isComposing)return;
     const source=engine.mp_editor_committed_text();
@@ -380,6 +394,8 @@ try{
   textEditor.addEventListener('blur',()=>{
     beforeEditorInput=null;
     editorCompositionCaret=null;
+    editorStableSelection=null;
+    editorLastNoncollapsedSelection=null;
     if(editorCompositionActive){
       if(engine.mp_editor_cancel()!==1)throw Error('Masonry composition cancel refused');
       editorCompositionActive=false;
@@ -388,11 +404,27 @@ try{
   });
   textEditor.addEventListener('compositionstart',()=>{
     if(engine.mp_editor_focused()!==1)throw Error('IME with no Rust TextArea focus');
-    syncEditorSelection();
+    const source=engine.mp_editor_committed_text();
+    const current=textEditor.value===source
+      ?{source,start:textEditor.selectionStart,end:textEditor.selectionEnd}
+      :null;
+    const previous=editorLastNoncollapsedSelection?.source===source
+      ?editorLastNoncollapsedSelection:null;
+    const stable=editorStableSelection?.source===source?editorStableSelection:null;
+    // Some browsers collapse DOM selection before compositionstart.
+    // Restore the last validated range if composition disturbed the caret.
+    const capture=current&&current.start!==current.end
+      ?current:(previous||current||stable);
+    if(!capture)throw Error('IME cannot identify authoritative preedit range');
+    const start=utf16ByteOffset(source,capture.start);
+    const end=utf16ByteOffset(source,capture.end);
+    const rc=engine.mp_editor_begin_composition(start,end);
+    if(rc!==1)throw Error('Masonry IME range rejected: '+rc);
     beforeEditorInput=null;
-    editorCompositionCaret=textEditor.selectionStart;
+    editorCompositionCaret=capture.start;
     editorCompositionActive=true;
-    if(engine.mp_editor_preedit('')!==1)throw Error('Masonry IME start refused');
+    editorStableSelection=null;
+    editorLastNoncollapsedSelection=null;
     updateFocusLabels();requestPaint();
   });
   textEditor.addEventListener('compositionupdate',event=>{
@@ -403,11 +435,14 @@ try{
   });
   textEditor.addEventListener('compositionend',event=>{
     if(!editorCompositionActive)return;
-    editorCompositionActive=false;
     const result=event.data
-      ?engine.mp_editor_commit(event.data)
+      ?engine.mp_editor_commit_selection(event.data)
       :engine.mp_editor_cancel();
-    if(result!==1)throw Error('Masonry IME commit/cancel refused');
+    if(result!==1)throw Error('Masonry selected IME commit/cancel refused: '+result);
+    editorCompositionActive=false;
+    beforeEditorInput=null;
+    editorStableSelection=null;
+    editorLastNoncollapsedSelection=null;
     if(editorCompositionCaret!==null && event.data)
       editorCompositionCaret+=event.data.length; // UTF-16 caret after committed IME text
     updateFocusLabels();requestPaint();
@@ -449,6 +484,7 @@ try{
               textEditor.selectionEnd]}));
     }
     beforeEditorInput=null;
+    editorLastNoncollapsedSelection=null;
     syncEditorSelection();
     requestPaint();
   });

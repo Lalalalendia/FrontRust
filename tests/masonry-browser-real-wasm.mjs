@@ -392,6 +392,10 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     await editor.evaluate(el=>el.setSelectionRange(7,8));
     assert.deepEqual(await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),[7,8],
       'Firefox/Chromium must preserve native selected UTF-16 range');
+    await page.waitForFunction(()=>{
+      const selection=window.__masonryProbe.snapshot().editorSelectionBytes;
+      return selection?.start===13&&selection?.end===14;
+    },null,{timeout:5000});
     // Playwright keyboard.type('猫') emulates key presses for a character
     // without a portable physical keyboard key. Firefox may insert it at
     // EOF instead of replacing the selection. insertText uses the browser's
@@ -405,14 +409,81 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
         selection:await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),errors}));
     assert.deepEqual(await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),[8,8]);
     assert.equal(await editor.inputValue(),'Привет 猫日本');
-    const afterSplice=await page.evaluate(()=>window.__masonryProbe.snapshot());
-    assert.equal(afterSplice.clicks,sceneBeforeEditor.clicks);
-    assert.equal(afterSplice.keyboardEvents,sceneBeforeEditor.keyboardEvents);
+
+    // R4e2: composition over a selected X is a single transaction against
+    // the ORIGINAL range. Preedit is visible only in the Rust preview,
+    // cancel/blur restore X and a late input cannot double-commit.
+    await editor.fill('Привет X日本');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет X日本');
+    await editor.evaluate(el=>el.setSelectionRange(7,8));
+    await page.waitForFunction(()=>{
+      const selection=window.__masonryProbe.snapshot().editorSelectionBytes;
+      return selection?.start===13&&selection?.end===14;
+    },null,{timeout:5000});
+    const beforeSelectedIme=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    await editor.evaluate(el=>{
+      el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));
+      el.dispatchEvent(new CompositionEvent('compositionupdate',{bubbles:true,data:'猫'}));
+    });
+    const selectedPreedit=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(selectedPreedit.editorCommitted,'Привет X日本',
+      'selected IME preedit prematurely committed text');
+    assert.equal(selectedPreedit.editorLive,'Привет 猫日本',
+      'selected preedit incorrectly appended instead of replacing X');
+    assert.equal(selectedPreedit.editorComposing,1);
+    await editor.evaluate(el=>el.dispatchEvent(
+      new CompositionEvent('compositionend',{bubbles:true,data:'猫'})));
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет 猫日本');
+    const selectedCommitted=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(selectedCommitted.editorCommits,beforeSelectedIme.editorCommits+1);
+    await editor.evaluate(el=>{
+      el.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'猫'}));
+      el.dispatchEvent(new InputEvent('input',
+        {bubbles:true,data:'猫',inputType:'insertFromComposition'}));
+    });
+    const lateCommit=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(lateCommit.editorCommits,selectedCommitted.editorCommits,
+      'late input or duplicate compositionend committed a second time');
+    assert.equal(lateCommit.editorCommitted,'Привет 猫日本');
+    await editor.fill('Привет X日本');
+    await editor.evaluate(el=>el.setSelectionRange(7,8));
+    await page.waitForFunction(()=>{
+      const selection=window.__masonryProbe.snapshot().editorSelectionBytes;
+      return selection?.start===13&&selection?.end===14;
+    },null,{timeout:5000});
+    await editor.evaluate(el=>{
+      el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));
+      el.dispatchEvent(new CompositionEvent('compositionupdate',{bubbles:true,data:'未確定'}));
+      el.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:''}));
+    });
+    const selectedCanceled=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(selectedCanceled.editorCommitted,'Привет X日本');
+    assert.equal(selectedCanceled.editorLive,'Привет X日本');
+    assert.equal(selectedCanceled.editorCommits,selectedCommitted.editorCommits,
+      'cancel incremented commit count');
+    // A composition abandoned by blur must also leave the selected text.
+    await editor.evaluate(el=>el.setSelectionRange(7,8));
+    await page.waitForFunction(()=>{
+      const selection=window.__masonryProbe.snapshot().editorSelectionBytes;
+      return selection?.start===13&&selection?.end===14;
+    },null,{timeout:5000});
+    await editor.evaluate(el=>{
+      el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));
+      el.dispatchEvent(new CompositionEvent('compositionupdate',{bubbles:true,data:'仮'}));
+    });
     await editor.blur();
     assert.equal(await page.evaluate(()=>window.__masonryProbe.snapshot().editorFocused),0);
+    const afterBlur=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(afterBlur.editorCommitted,'Привет X日本');
+    assert.equal(afterBlur.editorLive,'Привет X日本');
+    const afterSplice=afterBlur;
+    assert.equal(afterSplice.clicks,sceneBeforeEditor.clicks);
+    assert.equal(afterSplice.keyboardEvents,sceneBeforeEditor.keyboardEvents);
     assert.deepEqual(errors,[]);
     await page.screenshot({path:'test-results/masonry-'+name+'.png',fullPage:true});
-    console.log('PASS '+name+' R4e native DOM selection→Rust UTF-8 splice + R4d IME/R4c/R3b');
+    console.log('PASS '+name+' R4e2 selected IME commit/cancel/blur + R4e Unicode splice + R4d/R4c/R3b');
   }catch(error){
     await page.screenshot({path:'test-results/masonry-'+name+'-FAIL.png',fullPage:true}).catch(()=>{});
     console.error('FAIL '+name,error.stack,errors);throw error;

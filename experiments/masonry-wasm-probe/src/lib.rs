@@ -164,6 +164,7 @@ mod browser_host {
         editor_committed: String,
         editor_composing: bool,
         editor_preedit: String,
+        editor_composition_range: Option<(usize, usize)>,
         editor_commits: i32,
         editor_actions: Rc<Cell<i32>>,
         rects: Vec<SolidRect>,
@@ -326,6 +327,7 @@ mod browser_host {
             let mut host = Self {
                 root, text_root, editor_tag, editor_committed: String::new(),
                 editor_composing: false, editor_preedit: String::new(),
+                editor_composition_range: None,
                 editor_commits: 0, editor_actions,
                 rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
                 accessibility_nodes: 0, accessible_button: false,
@@ -639,12 +641,20 @@ mod browser_host {
                 .unwrap_or_default()
         }
 
-        // The bounded demo provides an append-only composition preview.
-        // This is NOT the canonical TextArea document and does not implement
-        // arbitrary selection or cursor-positioned preedit.
+        // Preview the provisional IME selection against the last accepted
+        // document, not Parley's mutable transient preedit buffer.
         pub fn editor_live_text(&self) -> String {
-            let mut preview = self.editor_document_text();
-            if self.editor_composing { preview.push_str(&self.editor_preedit); }
+            let mut preview = self.editor_committed.clone();
+            if self.editor_composing {
+                if let Some((start, end)) = self.editor_composition_range {
+                    if start <= end && end <= preview.len()
+                        && preview.is_char_boundary(start) && preview.is_char_boundary(end) {
+                        preview.replace_range(start..end, &self.editor_preedit);
+                        return preview;
+                    }
+                }
+                preview.push_str(&self.editor_preedit);
+            }
             preview
         }
 
@@ -656,9 +666,8 @@ mod browser_host {
 
         pub fn editor_focus(&mut self, focused: bool) -> i32 {
             if !focused && self.editor_composing {
-                self.text_root.handle_text_event(TextEvent::Ime(Ime::Disabled));
-                self.editor_composing = false;
-                self.editor_preedit.clear();
+                let cancel = self.editor_cancel();
+                if cancel != 1 { return cancel; }
             }
             let id = if focused {
                 self.text_root.get_widget_with_tag(self.editor_tag).map(|area| area.id())
@@ -747,9 +756,20 @@ mod browser_host {
             1
         }
 
+        // R4e2: capture the authoritative UTF-8 selection before the
+        // browser's composition events collapse/change the native caret.
+        pub fn editor_begin_composition(&mut self, start: usize, end: usize) -> i32 {
+            let selected = self.editor_select_range(start, end);
+            if selected != 1 { return selected; }
+            let started = self.editor_preedit("");
+            if started == 1 { self.editor_composition_range = Some((start, end)); }
+            started
+        }
+
         pub fn editor_preedit(&mut self, text: &str) -> i32 {
             let accepted = self.editor_accepts(text);
             if accepted < 0 { return accepted; }
+            self.editor_composition_range = None;
             self.text_root.handle_text_event(TextEvent::Ime(
                 Ime::Preedit(text.to_owned(), None)
             ));
@@ -785,13 +805,73 @@ mod browser_host {
             1
         }
 
+        // Parley temporarily replaces the selected range with preedit.
+        // Restore the canonical document when that transient range changes
+        // its length; then apply the original selection via real IME Commit.
+        // Recovery may reset undo history: this is still a bounded experiment.
+        pub fn editor_commit_selection(&mut self, inserted: &str) -> i32 {
+            if self.editor_focused() != 1 { return -1; }
+            if !self.editor_composing { return -3; }
+            let Some((start, end)) = self.editor_composition_range else { return -3; };
+            let before = self.editor_committed.clone();
+            if start > end || end > before.len()
+                || !before.is_char_boundary(start) || !before.is_char_boundary(end) {
+                return -4;
+            }
+            let Some(next_size) = before.len().checked_sub(end - start)
+                .and_then(|n| n.checked_add(inserted.len())) else { return -2; };
+            if next_size > 4096 { return -2; }
+            let expected = format!("{}{}{}", &before[..start], inserted, &before[end..]);
+            self.text_root.handle_text_event(TextEvent::Ime(Ime::Disabled));
+            self.editor_composing = false;
+            self.editor_preedit.clear();
+            self.editor_composition_range = None;
+            if self.editor_document_text() != before {
+                let tag = self.editor_tag;
+                self.text_root.edit_widget_with_tag(tag, |mut area| {
+                    TextArea::reset_text(&mut area, &before);
+                });
+                let _ = self.text_root.redraw();
+            }
+            let selected = self.editor_select_range(start, end);
+            if selected != 1 { return selected; }
+            let actions_before = self.editor_actions.get();
+            self.text_root.handle_text_event(TextEvent::Ime(
+                Ime::Commit(inserted.to_owned())
+            ));
+            let _ = self.text_root.redraw();
+            let actual = self.editor_document_text();
+            if actual != expected || self.editor_actions.get() <= actions_before {
+                let tag = self.editor_tag;
+                self.text_root.edit_widget_with_tag(tag, |mut area| {
+                    TextArea::reset_text(&mut area, &before);
+                });
+                let _ = self.text_root.redraw();
+                #[cfg(not(target_arch = "wasm32"))]
+                eprintln!("R4e2 IME selection mismatch: before={before:?} range=({start},{end}) inserted={inserted:?} expected={expected:?} actual={actual:?}");
+                return -5;
+            }
+            self.editor_committed = actual;
+            self.editor_commits = self.editor_commits.saturating_add(1);
+            1
+        }
+
         pub fn editor_cancel(&mut self) -> i32 {
             if self.editor_focused() != 1 { return -1; }
             self.text_root.handle_text_event(TextEvent::Ime(Ime::Disabled));
             self.text_root.handle_text_event(TextEvent::Ime(Ime::Enabled));
             self.editor_composing = false;
             self.editor_preedit.clear();
+            self.editor_composition_range = None;
+            if self.editor_document_text() != self.editor_committed {
+                let before = self.editor_committed.clone();
+                let tag = self.editor_tag;
+                self.text_root.edit_widget_with_tag(tag, |mut area| {
+                    TextArea::reset_text(&mut area, &before);
+                });
+            }
             let _ = self.text_root.redraw();
+            if self.editor_document_text() != self.editor_committed { return -5; }
             1
         }
 
@@ -932,6 +1012,23 @@ mod browser_host {
     pub fn mp_editor_splice(start: u32, end: u32, inserted: String) -> i32 {
         HOST.with(|h| h.borrow_mut().as_mut()
             .map(|host| host.editor_splice(start as usize, end as usize, &inserted))
+            .unwrap_or(-1))
+    }
+
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_begin_composition(start: u32, end: u32) -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_begin_composition(start as usize, end as usize))
+            .unwrap_or(-1))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[allow(unsafe_code)]
+    #[wasm_bindgen]
+    pub fn mp_editor_commit_selection(value: String) -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_commit_selection(&value))
             .unwrap_or(-1))
     }
 
@@ -1278,6 +1375,56 @@ mod browser_host {
             assert!(h.rects.iter().any(|r|
                 r.rgba == Color::from_rgb8(70,120,210).to_rgba8().to_u32()),
                 "valid independent widgets must still be retained");
+        }
+
+        #[test]
+        fn r4e2_real_ime_selected_text_commit_cancel_and_blur() {
+            let mut h = BrowserHost::new(320, 360);
+            let source = "Привет X日本";
+            assert_eq!(h.editor_focus(true), 1);
+            assert_eq!(h.editor_replace(source), 1);
+            assert_eq!(h.editor_commit_selection("猫"), -3,
+                "commit must not occur outside active composition");
+            assert_eq!(h.editor_begin_composition(13, 14), 1);
+            let before_actions = h.editor_actions.get();
+            assert_eq!(h.editor_update_preedit("猫"), 1);
+            assert!(h.editor_actions.get() > before_actions,
+                "selected preedit must reach the real Masonry TextArea");
+            assert_eq!(h.editor_committed, source,
+                "preedit must not change accepted text");
+            assert_eq!(h.editor_live_text(), "Привет 猫日本",
+                "selection-aware preview must replace X, not append");
+            assert_eq!(h.editor_commit_selection("猫"), 1);
+            assert_eq!(h.editor_document_text(), "Привет 猫日本");
+            assert_eq!(h.editor_committed, "Привет 猫日本");
+            assert_eq!(h.editor_commits, 1);
+            assert_eq!(h.editor_commit_selection("猫"), -3,
+                "late second commit must not duplicate text");
+            assert_eq!(h.editor_commits, 1);
+            assert_eq!(h.editor_replace(source), 1);
+            assert_eq!(h.editor_begin_composition(13, 14), 1);
+            assert_eq!(h.editor_update_preedit("未確定"), 1);
+            assert_eq!(h.editor_cancel(), 1);
+            assert_eq!(h.editor_document_text(), source,
+                "cancel must restore original selected X");
+            assert_eq!(h.editor_committed, source);
+            assert_eq!(h.editor_replace(source), 1);
+            assert_eq!(h.editor_begin_composition(13, 14), 1);
+            assert_eq!(h.editor_update_preedit("仮"), 1);
+            assert_eq!(h.editor_focus(false), 0);
+            assert_eq!(h.editor_document_text(), source,
+                "blur must roll back preedit without losing selected text");
+            assert_eq!(h.editor_commits, 1);
+            assert_eq!(h.editor_focus(true), 1);
+            assert_eq!(h.editor_begin_composition(14, 13), -4);
+            assert_eq!(h.editor_begin_composition(14, 15), -4,
+                "a boundary inside UTF-8 Japanese text must be rejected");
+            assert_eq!(h.editor_begin_composition(13, 14), 1);
+            assert_eq!(h.editor_commit_selection(&"x".repeat(4097)), -2);
+            assert_eq!(h.editor_committed, source);
+            assert_eq!(h.editor_cancel(), 1);
+            assert_eq!(h.editor_document_text(), source);
+            assert_eq!(h.clicks.get(), 0, "IME must never activate scene buttons");
         }
 
         #[test]

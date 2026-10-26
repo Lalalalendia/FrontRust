@@ -244,3 +244,43 @@ assert.equal(e.mp_editor_cancel(),1);
 assert.equal(e.mp_editor_focus(0),0);
 assert.equal(e.mp_editor_splice(1,1,'bad'),-1);
 console.log('PASS R4e real TextArea selection splice, UTF-8 boundaries, focus/IME fences (Node WASM)');
+
+// R4e2: restore the canonical selected range before the real Ime::Commit.
+// The old append-only commit path could produce "Привет X日本猫" under
+// Firefox despite a correct DOM selection/replacement.
+const source='Привет X日本';
+assert.equal(e.mp_editor_focus(1),1);
+assert.equal(e.mp_editor_replace(source),1);
+const commitCount=e.mp_editor_commits();
+assert.equal(e.mp_editor_commit_selection('猫'),-3);
+assert.equal(e.mp_editor_begin_composition(13,14),1);
+assert.equal(e.mp_editor_update_preedit('猫'),1);
+assert.equal(e.mp_editor_committed_text(),source,'preedit must be transient');
+assert.equal(e.mp_editor_live_text(),'Привет 猫日本',
+  'selection preview must not append');
+assert.equal(e.mp_editor_commit_selection('猫'),1);
+assert.equal(e.mp_editor_committed_text(),'Привет 猫日本');
+assert.equal(e.mp_editor_commits(),commitCount+1);
+assert.equal(e.mp_editor_commit_selection('猫'),-3,
+  'late compositionend must not commit a second time');
+assert.equal(e.mp_editor_committed_text(),'Привет 猫日本');
+assert.equal(e.mp_editor_replace(source),1);
+assert.equal(e.mp_editor_begin_composition(13,14),1);
+assert.equal(e.mp_editor_update_preedit('未確定'),1);
+assert.equal(e.mp_editor_cancel(),1);
+assert.equal(e.mp_editor_committed_text(),source);
+assert.equal(e.mp_editor_live_text(),source,'cancel must restore selection');
+assert.equal(e.mp_editor_replace(source),1);
+assert.equal(e.mp_editor_begin_composition(13,14),1);
+assert.equal(e.mp_editor_update_preedit('仮'),1);
+assert.equal(e.mp_editor_focus(0),0);
+assert.equal(e.mp_editor_committed_text(),source,'blur must roll back preedit');
+assert.equal(e.mp_editor_focus(1),1);
+assert.equal(e.mp_editor_begin_composition(14,15),-4,
+  'UTF-8 continuation boundary must fail closed');
+assert.equal(e.mp_editor_begin_composition(13,14),1);
+assert.equal(e.mp_editor_commit_selection('x'.repeat(4097)),-2);
+assert.equal(e.mp_editor_cancel(),1);
+assert.equal(e.mp_editor_committed_text(),source);
+assert.equal(e.mp_click_count(),clicksBeforeIme,'IME text activated the scene');
+console.log('PASS R4e2 selected IME commit/rollback, Unicode boundaries and dedupe (Node WASM)');
