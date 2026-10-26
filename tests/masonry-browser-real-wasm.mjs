@@ -432,8 +432,14 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.equal(selectedPreedit.editorLive,'Привет 猫日本',
       'selected preedit incorrectly appended instead of replacing X');
     assert.equal(selectedPreedit.editorComposing,1);
-    await editor.evaluate(el=>el.dispatchEvent(
-      new CompositionEvent('compositionend',{bubbles:true,data:'猫'})));
+    // Reproduce a stale input echo in the SAME synchronous task as the
+    // actual commit. A second new composition would be a different edit.
+    await editor.evaluate(el=>{
+      el.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'猫'}));
+      el.value='Привет X日本';
+      el.dispatchEvent(new InputEvent('input',
+        {bubbles:true,data:'猫',inputType:'insertText'}));
+    });
     await page.waitForFunction(()=>
       window.__masonryProbe.snapshot().editorCommitted==='Привет 猫日本');
     const selectedCommitted=await page.evaluate(()=>window.__masonryProbe.snapshot());
@@ -449,23 +455,6 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.equal(lateCommit.editorCommitted,'Привет 猫日本');
     assert.equal(await editor.inputValue(),'Привет 猫日本',
       'DOM input must synchronously reflect the accepted Rust commit');
-    // Reproduce a stale browser input echo in the same event loop turn.
-    // The old implementation treated the outdated DOM value as a new edit
-    // and silently replaced "猫" with the selected original "X".
-    await editor.evaluate(el=>{
-      el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));
-      el.dispatchEvent(new CompositionEvent('compositionupdate',{bubbles:true,data:'猫'}));
-      el.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'猫'}));
-      el.value='Привет X日本';
-      el.dispatchEvent(new InputEvent('input',
-        {bubbles:true,data:'猫',inputType:'insertText'}));
-    });
-    const staleEcho=await page.evaluate(()=>window.__masonryProbe.snapshot());
-    assert.equal(staleEcho.editorCommitted,'Привет 猫日本',
-      'late stale input rolled back accepted IME commit');
-    assert.equal(await editor.inputValue(),'Привет 猫日本');
-    assert.equal(staleEcho.editorCommits,selectedCommitted.editorCommits+1,
-      'one additional deliberate composition should commit exactly once');
     await editor.fill('Привет X日本');
     await page.waitForFunction(()=>
       window.__masonryProbe.snapshot().editorCommitted==='Привет X日本');
