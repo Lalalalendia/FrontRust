@@ -52,6 +52,44 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     });
     assert.ok(inkPixels>=8,
       'OpenType glyph outlines did not reach real Canvas pixels: '+inkPixels);
+    // R5b: register an independent OFL Latin subset into the real
+    // RenderRoot, switch the tagged Label dynamically, refuse a missing
+    // Japanese font and restore Cyrillic WITHOUT changing other scene nodes.
+    await page.locator('#demo-latin').click();
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().demoFontId===2);
+    const latin=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(latin.demoText,'Rust');
+    assert.equal(latin.outlinedGlyphs,4);
+    assert.equal(latin.skippedDraws,0);
+    await page.waitForFunction(()=>
+      document.querySelector('#demo-current')?.textContent?.includes('Rust'));
+    const latinInk=await page.evaluate(()=>{
+      const el=document.querySelector('#masonry-canvas');
+      const px=el.getContext('2d').getImageData(0,0,el.width,el.height).data;
+      let count=0;
+      for(let i=0;i<px.length;i+=4){
+        if(Math.abs(px[i]-35)<=8&&Math.abs(px[i+1]-36)<=8
+          &&Math.abs(px[i+2]-160)<=8&&px[i+3]===255)count++;
+      }
+      return count;
+    });
+    assert.ok(latinInk>=8,'real Latin glyphs were not painted in Canvas');
+    await page.locator('#demo-cjk').click();
+    assert.match(await page.locator('#demo-font-result').textContent(),
+      /REJECT/, 'missing CJK coverage must be visible to users');
+    const rejected=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(rejected.demoText,'Rust','unsupported CJK changed accepted text');
+    assert.equal(rejected.demoFontId,2);
+    assert.equal(rejected.outlinedGlyphs,4);
+    assert.equal(rejected.skippedDraws,0);
+    await page.locator('#demo-cyrillic').click();
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().demoFontId===1);
+    const restored=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(restored.demoText,'Привет');
+    assert.equal(restored.outlinedGlyphs,6);
+    assert.equal(restored.skippedDraws,0);
     let depth=0,maxDepth=0,greenDepth=0;
     const realGreen=first.rects.findIndex(r=>(r.rgba&255)===40&&((r.rgba>>>8)&255)===170);
     for(const op of first.ops){
@@ -587,7 +625,7 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
       window.__masonryProbe.snapshot().clicks),sceneBeforeEditor.clicks);
     assert.deepEqual(errors,[]);
     await page.screenshot({path:'test-results/masonry-'+name+'.png',fullPage:true});
-    console.log('PASS '+name+' R5a actual glyph outlines in Canvas + R4f/R4e2 regression gates');
+    console.log('PASS '+name+' R5b real font registration and missing CJK refusal + R5a/R4 regressions');
   }catch(error){
     await page.screenshot({path:'test-results/masonry-'+name+'-FAIL.png',fullPage:true}).catch(()=>{});
     console.error('FAIL '+name,error.stack,errors);throw error;

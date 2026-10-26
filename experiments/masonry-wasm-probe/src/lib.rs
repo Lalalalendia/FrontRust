@@ -173,7 +173,11 @@ mod browser_host {
         let outlines = font.outline_glyphs();
         let mut records = Vec::new();
         for glyph in &run.glyphs {
-            if !glyph.x.is_finite() || !glyph.y.is_finite() { return None; }
+            // Glyph ID zero is .notdef. Never turn missing characters into
+            // valid-looking placeholder geometry in the Canvas bridge.
+            if glyph.id == 0 || !glyph.x.is_finite() || !glyph.y.is_finite() {
+                return None;
+            }
             let outline = outlines.get(GlyphId::new(glyph.id))?;
             let mut pen = GlyphPath::default();
             outline.draw(
@@ -196,6 +200,39 @@ mod browser_host {
         Blob::new(Arc::new(
             include_bytes!("../fixtures/r5a-cyrillic-real.ttf").to_vec()
         ))
+    }
+
+    // A SECOND real OFL Lato subset, deliberately with a distinct registered
+    // family. This proves font registration and whole-run coverage selection.
+    // Mixed-script per-glyph fallback is NOT attempted in R5b.
+    const R5B_CYRILLIC_FONT: &[u8] = include_bytes!("../fixtures/r5a-cyrillic-real.ttf");
+    const R5B_LATIN_FONT: &[u8] = include_bytes!("../fixtures/r5b-latin-real.ttf");
+
+    fn r5b_latin_font() -> Blob<u8> {
+        Blob::new(Arc::new(R5B_LATIN_FONT.to_vec()))
+    }
+
+    // Return the first font with FULL coverage. Never accept glyph zero,
+    // U+FFFD, controls or a partly covered run. Correct mixed-script
+    // fallback needs a later shaped-run strategy and separate acceptance.
+    fn r5b_select_font(text: &str) -> Result<(i32, &'static str), i32> {
+        if text.is_empty() || text.len() > 48 || text.chars().any(|ch|
+            ch.is_control() || ch == '\u{FFFD}') {
+            return Err(-2);
+        }
+        const CATALOG: [(i32, &str, &[u8]); 2] = [
+            (1, "FrontRust Demo Subset", R5B_CYRILLIC_FONT),
+            (2, "FrontRust Latin Demo", R5B_LATIN_FONT),
+        ];
+        for (id, family, bytes) in CATALOG {
+            let font = FontRef::from_index(bytes, 0).map_err(|_| -9)?;
+            let cmap = font.charmap();
+            if text.chars().all(|ch| cmap.map(ch)
+                .is_some_and(|id| id != GlyphId::new(0))) {
+                return Ok((id, family));
+            }
+        }
+        Err(-6)
     }
 
     // The pinned Parley TextArea needs glyph clusters to turn UTF-8 byte
@@ -255,6 +292,9 @@ mod browser_host {
         curve_tag: WidgetTag<Canvas>,
         button_tag: WidgetTag<Button>,
         root_tag: WidgetTag<Flex>,
+        demo_label_tag: WidgetTag<Label>,
+        demo_text: String,
+        demo_font_id: i32,
         keyboard_events: i32,
     }
 
@@ -281,6 +321,7 @@ mod browser_host {
             // Stable semantic identity of the demo's one real keyboard-focusable button.
             let button_tag: WidgetTag<Button> = WidgetTag::named("frontrust-primary-action");
             let root_tag: WidgetTag<Flex> = WidgetTag::named("frontrust-demo-root");
+            let demo_label_tag: WidgetTag<Label> = WidgetTag::named("frontrust-demo-font-label");
             let root_widget = Flex::column()
                 .with_fixed(tile(Color::from_rgb8(70, 120, 210), true))
                 .with_fixed(
@@ -306,7 +347,7 @@ mod browser_host {
                                 FontFamilyName::Named("FrontRust Demo Subset".into())
                             )))
                             .with_hint(false)
-                    ).with_props(PropertySet::one(
+                    ).with_tag(demo_label_tag).with_props(PropertySet::one(
                         ContentColor::new(Color::from_rgb8(35, 36, 160))
                     ))
                 )
@@ -350,6 +391,11 @@ mod browser_host {
                     test_font: Some(r5a_real_cyrillic_font()),
                 },
             );
+            // Register the Latin family in the ACTUAL upstream fontique
+            // collection and let LayoutContext relayout the current widget
+            // tree. JS never injects a CSS font into the Masonry canvas.
+            let registered = root.register_fonts(r5b_latin_font());
+            assert!(!registered.is_empty(), "R5b Latin font registration failed");
             // Transform only this existing Rust widget, never the Canvas JS shape.
             let center = Vec2::new(32.0,32.0);
             let matrix = Affine::translate(center)
@@ -425,6 +471,7 @@ mod browser_host {
                 access_button_id: None, access_button_disabled: false, access_focus_id: 0,
                 skipped_draws: 0, glyph_runs: 0, outlined_glyphs: 0,
                 clicks, curve_tag, button_tag, root_tag,
+                demo_label_tag, demo_text: "Привет".to_owned(), demo_font_id: 1,
                 keyboard_events: 0,
             };
             host.redraw();
@@ -600,6 +647,45 @@ mod browser_host {
                 });
             });
             self.redraw();
+        }
+
+        // Change an existing REAL Rust Label. A successful update preserves
+        // the same WidgetId and re-shapes through Masonry/Parley. Reject
+        // uncovered input before mutating the tree or the accepted frame.
+        pub fn demo_set_text(&mut self, value: &str) -> i32 {
+            let (font_id, family) = match r5b_select_font(value) {
+                Ok(found) => found,
+                Err(code) => return code,
+            };
+            if self.demo_text == value { return 1; }
+            let old_text = self.demo_text.clone();
+            let old_font_id = self.demo_font_id;
+            let tag = self.demo_label_tag;
+            self.root.edit_widget_with_tag(tag, |mut label| {
+                Label::insert_style(&mut label, StyleProperty::FontFamily(
+                    FontFamily::Single(FontFamilyName::Named(family.into()))
+                ));
+                Label::set_text(&mut label, value.to_owned());
+            });
+            self.redraw();
+            let valid = self.skipped_draws == 0 && self.glyph_runs > 0
+                && self.outlined_glyphs as usize == value.chars().count();
+            if !valid {
+                let restored = if old_font_id == 1 {
+                    "FrontRust Demo Subset"
+                } else { "FrontRust Latin Demo" };
+                self.root.edit_widget_with_tag(tag, |mut label| {
+                    Label::insert_style(&mut label, StyleProperty::FontFamily(
+                        FontFamily::Single(FontFamilyName::Named(restored.into()))
+                    ));
+                    Label::set_text(&mut label, old_text.clone());
+                });
+                self.redraw();
+                return -5; // previous accepted frame preserved
+            }
+            self.demo_text = value.to_owned();
+            self.demo_font_id = font_id;
+            1
         }
 
         pub fn resize(&mut self, width: u32, height: u32) -> i32 {
@@ -1330,6 +1416,23 @@ mod browser_host {
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_outlined_glyphs() -> i32 { get_i32(|h| h.outlined_glyphs) }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_demo_font_id() -> i32 { get_i32(|h| h.demo_font_id) }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(unsafe_code)]
+    #[wasm_bindgen]
+    pub fn mp_demo_text() -> String {
+        HOST.with(|h| h.borrow().as_ref()
+            .map(|host| host.demo_text.clone()).unwrap_or_default())
+    }
+    #[cfg(target_arch = "wasm32")]
+    #[allow(unsafe_code)]
+    #[wasm_bindgen]
+    pub fn mp_demo_set_text(value: String) -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.demo_set_text(&value)).unwrap_or(-1))
+    }
     // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
@@ -1583,6 +1686,40 @@ mod browser_host {
             at_limit.line_to((513.0, 1.0));
             assert!(shape_record(&Geometry::Path(at_limit), &Affine::IDENTITY, white).is_none(),
                 "513 PathEl must fail closed instead of drawing a bounding box");
+        }
+
+        #[test]
+        fn r5b_registered_latin_font_and_fail_closed_uncovered_text() {
+            let mut host = BrowserHost::new(320, 360);
+            assert_eq!(host.demo_font_id, 1);
+            assert_eq!(host.demo_text, "Привет");
+            assert_eq!(host.demo_set_text("Rust"), 1);
+            assert_eq!(host.demo_font_id, 2);
+            assert_eq!(host.demo_text, "Rust");
+            assert_eq!(host.glyph_runs, 1);
+            assert_eq!(host.outlined_glyphs, 4);
+            assert_eq!(host.skipped_draws, 0);
+            // A missing character or mixed-script string must be rejected,
+            // preserving both label text and the accepted frame. It must NOT
+            // render ID=0 .notdef or silently substitute CSS fillText.
+            for unsupported in ["日本", "🐱", "Привет Rust", "Rust猫"] {
+                assert_eq!(host.demo_set_text(unsupported), -6);
+                assert_eq!(host.demo_text, "Rust");
+                assert_eq!(host.demo_font_id, 2);
+                assert_eq!(host.skipped_draws, 0);
+                assert_eq!(host.outlined_glyphs, 4);
+            }
+            assert_eq!(host.demo_set_text(""), -2);
+            assert_eq!(host.demo_set_text("Rust\n"), -2);
+            assert_eq!(host.demo_set_text("Привет"), 1);
+            assert_eq!(host.demo_font_id, 1);
+            assert_eq!(host.demo_text, "Привет");
+            assert_eq!(host.outlined_glyphs, 6);
+            assert_eq!(host.skipped_draws, 0);
+            // A second relayout/resize must not lose the selected font.
+            host.resize(400, 300);
+            assert_eq!(host.demo_text, "Привет");
+            assert_eq!(host.outlined_glyphs, 6);
         }
 
         #[test]

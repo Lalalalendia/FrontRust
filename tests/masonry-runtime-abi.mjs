@@ -16,7 +16,7 @@ const symbols=[
   'mp_version','mp_init','mp_resize','mp_pointer','mp_rect_count',
   'mp_rect_x','mp_rect_y','mp_rect_width','mp_rect_height','mp_rect_rgba',
   'mp_layer_count','mp_access_nodes','mp_skipped_draws',
-  'mp_glyph_runs','mp_outlined_glyphs','mp_click_count','mp_width','mp_height',
+  'mp_glyph_runs','mp_outlined_glyphs','mp_demo_font_id','mp_click_count','mp_width','mp_height',
   'mp_rect_local_x','mp_rect_local_y','mp_rect_local_width','mp_rect_local_height',
   'mp_rect_radius_tl','mp_rect_radius_tr','mp_rect_radius_br','mp_rect_radius_bl',
   'mp_rect_matrix_a','mp_rect_matrix_b','mp_rect_matrix_c',
@@ -34,7 +34,8 @@ const symbols=[
   'mp_editor_live_text','mp_editor_commits','mp_editor_actions',
   'mp_editor_select_range','mp_editor_splice',
   'mp_editor_undo','mp_editor_redo',
-  'mp_editor_undo_depth','mp_editor_redo_depth'
+  'mp_editor_undo_depth','mp_editor_redo_depth',
+  'mp_demo_text','mp_demo_set_text'
 ];
 for(const s of symbols)assert.equal(typeof e[s],'function','missing exported '+s);
 assert.equal(e.mp_version(),1);
@@ -154,6 +155,26 @@ const cubicCenter=[
 assert.ok(Math.abs(quadCenter[0]-55)<0.001&&Math.abs(quadCenter[1]-30)<0.001);
 assert.ok(Math.abs(cubicCenter[0]-55.25)<0.001&&Math.abs(cubicCenter[1]-14.5)<0.001);
 assert.equal(e.mp_skipped_draws(),0,'Bezier curves must not be silently discarded');
+// R5b: two real registered OFL font families, explicit WHOLE-RUN coverage.
+// These changes use the same live Masonry Label, not a browser CSS substitute.
+assert.equal(e.mp_demo_text(),'Привет');
+assert.equal(e.mp_demo_font_id(),1);
+assert.equal(e.mp_demo_set_text('Rust'),1);
+assert.equal(e.mp_demo_font_id(),2,'Latin family was not selected');
+assert.equal(e.mp_demo_text(),'Rust');
+assert.equal(e.mp_outlined_glyphs(),4);
+assert.equal(e.mp_skipped_draws(),0);
+for(const text of ['日本','🐱','Привет Rust','Rust猫']){
+  assert.equal(e.mp_demo_set_text(text),-6,'unknown coverage not rejected: '+text);
+  assert.equal(e.mp_demo_text(),'Rust','rejection mutated accepted text');
+  assert.equal(e.mp_outlined_glyphs(),4,'rejection mutated glyph scene');
+}
+assert.equal(e.mp_demo_set_text(''),-2);
+assert.equal(e.mp_demo_set_text('Привет'),1);
+assert.equal(e.mp_demo_font_id(),1);
+assert.equal(e.mp_outlined_glyphs(),6);
+assert.equal(e.mp_skipped_draws(),0);
+console.log('PASS R5b registered Latin/Cyrillic font coverage and fail-closed unsupported runs (Node WASM)');
 // WASM exports reject out-of-range commands; they never alias a different path.
 assert.equal(e.mp_rect_path_kind(quad.i,9999),-1);
 assert.ok(Number.isNaN(e.mp_rect_path_arg(cubic.i,9999,0)));

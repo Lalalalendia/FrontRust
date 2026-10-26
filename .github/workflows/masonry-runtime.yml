@@ -29,6 +29,8 @@ jobs:
           node-version: '22'
       - name: Install headless native fontconfig
         run: sudo apt-get update -qq && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev pkg-config
+      - name: Verify licensed OpenType fixture integrity
+        run: python3 tests/verify-masonry-font-fixtures.py
       - name: Native RenderRoot smoke with actual Masonry scene
         run: cargo test --features widgets --manifest-path experiments/masonry-wasm-probe/Cargo.toml
       - name: Build actual Masonry browser WASM module

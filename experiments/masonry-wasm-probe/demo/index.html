@@ -30,7 +30,7 @@
 <main>
   <div class="eyebrow">FRONTRUST / EXPERIMENTAL RENDERER</div>
   <h1>Masonry в браузере</h1>
-  <p>Набор реальных виджетов, <code>RenderRoot</code> и графические команды из Rust/WASM. Canvas2D отображает реальные Masonry-примитивы: заливки, контуры, два вложенных клипа, повёрнутую стрелку, две кривые QuadTo/CurveTo и ограниченный векторный вывод настоящих GlyphRun из Rust. Слово «Привет» рисуется настоящими контурами лицензированного Lato (минимальный TTF-поднабор). Полноценный набор шрифтов, CJK fallback, композитные группы и градиенты ещё не реализованы.</p>
+  <p>Набор реальных виджетов, <code>RenderRoot</code> и графические команды из Rust/WASM. Canvas2D отображает реальные Masonry-примитивы: заливки, контуры, два вложенных клипа, повёрнутую стрелку, две кривые QuadTo/CurveTo и ограниченный векторный вывод настоящих GlyphRun из Rust. Слова «Привет» и «Rust» выбираются по полному покрытию cmap двух лицензированных Lato TTF-поднаборов. Неизвестные или смешанные строки отклоняются без подмены «.notdef». Это ещё не поместное fallback-переключение отдельных глифов, полноценный font manager, CJK/emoji, композитные группы и градиенты.</p>
   <div class="layout">
     <section class="surface" aria-label="Masonry Canvas2D">
       <canvas id="masonry-canvas" width="320" height="360" aria-hidden="true"></canvas>
@@ -41,6 +41,7 @@
       <div class="label">Painted rectangles</div><div class="value" id="rectangles">—</div>
       <div class="label">AccessKit nodes</div><div class="value" id="access">—</div>
       <div class="label">Real Masonry glyph runs / outlined paths</div><div class="value" id="glyph-runs">—</div>
+      <div class="label">Шрифт сцены (R5b)</div><div class="value" id="demo-current">Привет / family #1</div>
       <div class="label">Rust ButtonPress count</div><div class="value" id="clicks">0</div>
       <div class="semantic-controls" role="group" aria-label="Семантические элементы сцены и инспектора">
         <button type="button" id="masonry-action" data-semantic-id="pending">Активировать кнопку Masonry</button>
@@ -54,6 +55,11 @@
         <span class="meta">Undo / Redo: <output id="rust-editor-undo-depth">0</output> / <output id="rust-editor-redo-depth">0</output> (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z)</span>
         <span class="meta" id="focus-owner">Фокус: вне сцены</span>
         <span class="meta" id="composition-state">IME: неактивна</span>
+        <label>Проверка реального шрифта и покрытия glyph cmap (R5b)</label>
+        <button type="button" id="demo-latin">Latin: Rust</button>
+        <button type="button" id="demo-cyrillic">Кириллица: Привет</button>
+        <button type="button" id="demo-cjk">Нет CJK: 日本 (отклонить)</button>
+        <span class="meta" id="demo-font-result" role="status">Проверка шрифта</span>
         <button type="button" id="toggle-disabled">Отключить кнопку Rust</button>
         <button type="button" id="toggle-present">Удалить кнопку Rust</button>
       </div>

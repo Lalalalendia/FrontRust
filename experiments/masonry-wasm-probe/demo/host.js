@@ -52,6 +52,7 @@ const required=[
   'mp_rect_y','mp_rect_width','mp_rect_height','mp_rect_rgba',
   'mp_layer_count','mp_access_nodes','mp_skipped_draws',
   'mp_glyph_runs','mp_outlined_glyphs',
+  'mp_demo_set_text','mp_demo_text','mp_demo_font_id',
   'mp_click_count','mp_width','mp_height',
   'mp_rect_local_x','mp_rect_local_y','mp_rect_local_width','mp_rect_local_height',
   'mp_rect_radius_tl','mp_rect_radius_tr','mp_rect_radius_br','mp_rect_radius_bl',
@@ -167,6 +168,7 @@ function snapshot(){
     accessNodes:engine.mp_access_nodes(),
     skippedDraws:engine.mp_skipped_draws(),
     glyphRuns:engine.mp_glyph_runs(),outlinedGlyphs:engine.mp_outlined_glyphs(),
+    demoText:engine.mp_demo_text(),demoFontId:engine.mp_demo_font_id(),
     clicks:engine.mp_click_count(),rects:sceneRects(),ops:sceneOps(),
     semanticButtonId:engine.mp_semantic_button_id(),
     accessButtonId:String(engine.mp_access_button_id()),
@@ -327,6 +329,7 @@ function paint(){
   el('rectangles').textContent=String(scene.rects.length)+' / '+scene.ops.length+' ops';
   el('access').textContent=String(scene.accessNodes);
   el('glyph-runs').textContent=String(scene.glyphRuns)+' / '+String(scene.outlinedGlyphs)+' outlined';
+  el('demo-current').textContent=scene.demoText+' / family #'+scene.demoFontId;
   el('clicks').textContent=String(scene.clicks);
   lastSnapshot=scene;
 }
@@ -590,6 +593,17 @@ try{
     engine.mp_pointer(0,p.x,p.y);
     requestPaint();
   });
+  function setDemoText(value){
+    const rc=engine.mp_demo_set_text(value);
+    el('demo-font-result').textContent=rc===1
+      ? 'Файл шрифта покрывает все символы'
+      : 'REJECT: шрифт не покрывает строку (код '+rc+')';
+    requestPaint();
+    return rc;
+  }
+  el('demo-latin').addEventListener('click',()=>setDemoText('Rust'));
+  el('demo-cyrillic').addEventListener('click',()=>setDemoText('Привет'));
+  el('demo-cjk').addEventListener('click',()=>setDemoText('日本'));
   el('toggle-disabled').addEventListener('click',()=>{
     setButtonDisabled(engine.mp_access_button_disabled()!==1);
   });
@@ -602,7 +616,7 @@ try{
   // Exposed only for deterministic browser harness assertions.
   updateFocusLabels();
   window.__masonryProbe={
-    snapshot,resize,validateScene,focusOwner,setButtonDisabled,setButtonPresent,
+    snapshot,resize,validateScene,focusOwner,setButtonDisabled,setButtonPresent,setDemoText,
     get composing(){return compositionActive||editorCompositionActive},
     get lastSnapshot(){return lastSnapshot}
   };
