@@ -15,7 +15,8 @@ assert.equal(e.mp_editor_committed_text,wasmGlue.mp_editor_committed_text);
 const symbols=[
   'mp_version','mp_init','mp_resize','mp_pointer','mp_rect_count',
   'mp_rect_x','mp_rect_y','mp_rect_width','mp_rect_height','mp_rect_rgba',
-  'mp_layer_count','mp_access_nodes','mp_skipped_draws','mp_click_count','mp_width','mp_height',
+  'mp_layer_count','mp_access_nodes','mp_skipped_draws',
+  'mp_glyph_runs','mp_outlined_glyphs','mp_click_count','mp_width','mp_height',
   'mp_rect_local_x','mp_rect_local_y','mp_rect_local_width','mp_rect_local_height',
   'mp_rect_radius_tl','mp_rect_radius_tr','mp_rect_radius_br','mp_rect_radius_bl',
   'mp_rect_matrix_a','mp_rect_matrix_b','mp_rect_matrix_c',
@@ -80,6 +81,16 @@ const greenOpIndex=ops.findIndex(o=>o.kind===1&&o.shape===greenIndex);
 assert.ok(greenOpIndex>clipPush&&greenOpIndex<clipPop,'clipped draw must remain inside clip scope');
 assert.ok(clip.width<rects[greenIndex].width,'viewport must cut green background horizontally');
 assert.equal(e.mp_skipped_draws(),0,'unexpected lossy paint ops');
+assert.ok(e.mp_glyph_runs()>0,'real Masonry Label emitted no GlyphRun');
+assert.ok(e.mp_outlined_glyphs()>=6,'real Parley Cyrillic glyph outlines missing');
+const ink=encode(35,36,160);
+const outlinedIndexes=rects.flatMap((r,i)=>r.rgba===ink?[i]:[]);
+assert.equal(outlinedIndexes.length,e.mp_outlined_glyphs(),
+  'outlined glyph paths must correspond to scene shapes');
+assert.ok(outlinedIndexes.every(i=>
+  e.mp_rect_path_count(i)>=3&&e.mp_rect_path_count(i)<=512),
+  'all shaped glyphs must have a bounded vector contour');
+console.log('PASS R5a real Masonry GlyphRun→skrifa outline→scene path (Node WASM)');
 let depth=0,maxDepth=0,depthAtGreen=0;
 for(const op of ops){
   if(op.kind===3){depth++;maxDepth=Math.max(maxDepth,depth);}

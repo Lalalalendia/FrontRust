@@ -23,7 +23,7 @@ mod browser_host {
     use masonry::core::{Ime, NewWidget, PropertySet, TextEvent, Widget, WidgetTag, WindowEvent};
     use masonry::imaging::record::Clip;
     use masonry::dpi::{PhysicalPosition, PhysicalSize};
-    use masonry::imaging::{Painter, record::{Command, Draw, Geometry, Scene}};
+    use masonry::imaging::{Painter, record::{Command, Draw, Geometry, GlyphRun, Scene}};
     use masonry::kurbo::{Affine, BezPath, Cap, Join, PathEl, Point, Shape as _, Stroke, Vec2};
     use masonry::layout::{AsUnit, Length};
     use masonry::peniko::{Blob, Brush, Color, Fill};
@@ -35,10 +35,12 @@ mod browser_host {
         PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
         PointerType,
     };
-    use masonry::widgets::{Button, ButtonPress, Canvas, DisclosureButton, Flex, Portal, SizedBox, TextAction, TextArea, TextInput};
+    use masonry::widgets::{Button, ButtonPress, Canvas, DisclosureButton, Flex, Label, Portal, SizedBox, TextAction, TextArea, TextInput};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::Arc;
+    use skrifa::{FontRef, GlyphId, MetadataProvider,
+        instance::{LocationRef, Size}, outline::{DrawSettings, OutlinePen}};
     #[cfg(target_arch = "wasm32")]
     use wasm_bindgen::prelude::wasm_bindgen;
 
@@ -135,6 +137,58 @@ mod browser_host {
         })
     }
 
+    #[derive(Default)]
+    struct GlyphPath(BezPath);
+    // Shaped glyph IDs and positions come from the REAL Masonry GlyphRun.
+    // These are OpenType y-up paths, reflected to Canvas y-down at draw time.
+    impl OutlinePen for GlyphPath {
+        fn move_to(&mut self, x: f32, y: f32) { self.0.move_to((x as f64, y as f64)); }
+        fn line_to(&mut self, x: f32, y: f32) { self.0.line_to((x as f64, y as f64)); }
+        fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+            self.0.quad_to((cx as f64, cy as f64), (x as f64, y as f64));
+        }
+        fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32,
+            x: f32, y: f32) {
+            self.0.curve_to((cx0 as f64, cy0 as f64),
+                (cx1 as f64, cy1 as f64), (x as f64, y as f64));
+        }
+        fn close(&mut self) { self.0.close_path(); }
+    }
+
+    // R5a: only small, solid, unhinted, unvaried monochrome outlines.
+    // No fillText fallback: that would discard upstream shaping and offsets.
+    fn outlined_glyph_records(run: &GlyphRun) -> Option<Vec<SolidRect>> {
+        if run.glyphs.len() > 32 || run.font.data.len() > 2_000_000
+            || !run.font_size.is_finite() || run.font_size <= 0.0
+            || run.font_size > 128.0 || run.glyph_transform.is_some()
+            || run.brush_transform.is_some() || run.hint
+            || !run.normalized_coords.is_empty()
+            || run.font_embolden != Vec2::ZERO
+            || run.composite != Default::default()
+            || !matches!(&run.style, masonry::peniko::Style::Fill(Fill::NonZero)) {
+            return None;
+        }
+        let Brush::Solid(color) = &run.brush else { return None; };
+        let font = FontRef::from_index(run.font.data.as_ref(), run.font.index).ok()?;
+        let outlines = font.outline_glyphs();
+        let mut records = Vec::new();
+        for glyph in &run.glyphs {
+            if !glyph.x.is_finite() || !glyph.y.is_finite() { return None; }
+            let outline = outlines.get(GlyphId::new(glyph.id))?;
+            let mut pen = GlyphPath::default();
+            outline.draw(
+                DrawSettings::unhinted(Size::new(run.font_size), LocationRef::default()),
+                &mut pen
+            ).ok()?;
+            if pen.0.elements().is_empty() { continue; } // e.g. space
+            let xform = run.transform
+                * Affine::translate((glyph.x as f64, glyph.y as f64))
+                * Affine::scale_non_uniform(1.0, -1.0);
+            records.push(shape_record(&Geometry::Path(pen.0), &xform, *color)?);
+        }
+        Some(records)
+    }
+
     // The pinned Parley TextArea needs glyph clusters to turn UTF-8 byte
     // offsets into cursors. Without ANY font, select_byte_range silently
     // snaps both cursors to EOF: the next paste appends instead of replacing.
@@ -186,6 +240,8 @@ mod browser_host {
         access_button_disabled: bool,
         access_focus_id: u64,
         skipped_draws: i32,
+        glyph_runs: i32,
+        outlined_glyphs: i32,
         clicks: Rc<Cell<i32>>,
         curve_tag: WidgetTag<Canvas>,
         button_tag: WidgetTag<Button>,
@@ -250,6 +306,17 @@ mod browser_host {
                     )
                     .prepare()
                 )
+                .with_fixed(
+                    NewWidget::new(
+                        Label::new("Привет")
+                            .with_style(StyleProperty::FontFamily(FontFamily::Single(
+                                FontFamilyName::Named("FrontRust Layout Fixture".into())
+                            )))
+                            .with_hint(false)
+                    ).with_props(PropertySet::one(
+                        ContentColor::new(Color::from_rgb8(35, 36, 160))
+                    ))
+                )
                 .prepare().with_tag(root_tag);
             let clicks = Rc::new(Cell::new(0_i32));
             let action_clicks = Rc::clone(&clicks);
@@ -268,7 +335,7 @@ mod browser_host {
                     size_policy: WindowSizePolicy::User,
                     size: PhysicalSize::new(width.clamp(160, 1600), height.clamp(120, 1200)),
                     scale_factor: 1.0,
-                    test_font: None,
+                    test_font: Some(r4e_layout_font()),
                 },
             );
             // Transform only this existing Rust widget, never the Canvas JS shape.
@@ -344,7 +411,8 @@ mod browser_host {
                 rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
                 accessibility_nodes: 0, accessible_button: false,
                 access_button_id: None, access_button_disabled: false, access_focus_id: 0,
-                skipped_draws: 0, clicks, curve_tag, button_tag, root_tag,
+                skipped_draws: 0, glyph_runs: 0, outlined_glyphs: 0,
+                clicks, curve_tag, button_tag, root_tag,
                 keyboard_events: 0,
             };
             host.redraw();
@@ -387,6 +455,8 @@ mod browser_host {
             self.rects.clear();
             self.ops.clear();
             self.skipped_draws = 0;
+            self.glyph_runs = 0;
+            self.outlined_glyphs = 0;
             let mut clip_support: Vec<bool> = Vec::new();
             let mut unsupported_group_depth = 0usize;
             for command in flattened.commands() {
@@ -429,6 +499,21 @@ mod browser_host {
                     Command::Draw(id) => {
                         if unsupported_group_depth > 0 || clip_support.iter().any(|ok| !ok) {
                             self.skipped_draws += 1;
+                            continue;
+                        }
+                        if let Draw::GlyphRun(run) = flattened.draw_op(*id) {
+                            let Some(outlines) = outlined_glyph_records(run) else {
+                                self.skipped_draws += 1; // unsupported glyph format, NEVER invisible
+                                continue;
+                            };
+                            if self.rects.len() + outlines.len() > 128
+                                || self.ops.len() + outlines.len() > 256 {
+                                self.skipped_draws += 1; // bounded transport
+                                continue;
+                            }
+                            self.glyph_runs += 1;
+                            self.outlined_glyphs += outlines.len() as i32;
+                            for path in outlines { self.add_op(path, 1, 0.0, 0, 4.0, 0); }
                             continue;
                         }
                         let (kind, shape, transform, color, stroke_width, stroke_join, miter_limit, stroke_cap) =
@@ -1227,6 +1312,12 @@ mod browser_host {
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
     pub extern "C" fn mp_skipped_draws() -> i32 { get_i32(|h| h.skipped_draws) }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_glyph_runs() -> i32 { get_i32(|h| h.glyph_runs) }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_outlined_glyphs() -> i32 { get_i32(|h| h.outlined_glyphs) }
     // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
     #[allow(unsafe_code)]
     #[unsafe(no_mangle)]
@@ -1480,6 +1571,24 @@ mod browser_host {
             at_limit.line_to((513.0, 1.0));
             assert!(shape_record(&Geometry::Path(at_limit), &Affine::IDENTITY, white).is_none(),
                 "513 PathEl must fail closed instead of drawing a bounding box");
+        }
+
+        #[test]
+        fn r5a_real_masonry_label_produces_bounded_outline_paths() {
+            let mut h = BrowserHost::new(320, 360);
+            assert_eq!(h.skipped_draws, 0, "glyphs must not disappear silently");
+            assert!(h.glyph_runs > 0, "no genuine Masonry GlyphRun detected");
+            assert!(h.outlined_glyphs >= 6, "expected Cyrillic label outlines");
+            let ink = Color::from_rgb8(35, 36, 160).to_rgba8().to_u32();
+            let glyphs = h.rects.iter().filter(|r| r.rgba == ink).collect::<Vec<_>>();
+            assert_eq!(glyphs.len(), h.outlined_glyphs as usize);
+            assert!(glyphs.iter().all(|r| r.path.len() >= 3
+                && r.path.len() <= 512 && r.path.iter().all(|p|
+                    p.args.iter().all(|n| n.is_finite()))));
+            assert!(glyphs.iter().any(|r| r.y > 120.0 && r.y < 360.0));
+            h.resize(400, 300);
+            assert_eq!(h.skipped_draws, 0);
+            assert!(h.outlined_glyphs >= 6);
         }
 
         #[test]

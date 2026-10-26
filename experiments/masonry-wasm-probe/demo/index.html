@@ -30,7 +30,7 @@
 <main>
   <div class="eyebrow">FRONTRUST / EXPERIMENTAL RENDERER</div>
   <h1>Masonry в браузере</h1>
-  <p>Набор реальных виджетов, <code>RenderRoot</code> и графические команды из Rust/WASM. Canvas2D отображает реальные Masonry-примитивы: заливки, контуры, два вложенных клипа, повёрнутую стрелку и две кривые QuadTo/CurveTo из Rust. Текст, композитные группы и градиенты пока не реализованы.</p>
+  <p>Набор реальных виджетов, <code>RenderRoot</code> и графические команды из Rust/WASM. Canvas2D отображает реальные Masonry-примитивы: заливки, контуры, два вложенных клипа, повёрнутую стрелку, две кривые QuadTo/CurveTo и ограниченный векторный вывод настоящих GlyphRun из Rust. Шрифт демонстрационного слова пока синтетический (условные контуры), полноценная типографика, композитные группы и градиенты не реализованы.</p>
   <div class="layout">
     <section class="surface" aria-label="Masonry Canvas2D">
       <canvas id="masonry-canvas" width="320" height="360" aria-hidden="true"></canvas>
@@ -40,6 +40,7 @@
       <div class="label">Scene layers</div><div class="value" id="layers">—</div>
       <div class="label">Painted rectangles</div><div class="value" id="rectangles">—</div>
       <div class="label">AccessKit nodes</div><div class="value" id="access">—</div>
+      <div class="label">Real Masonry glyph runs / outlined paths</div><div class="value" id="glyph-runs">—</div>
       <div class="label">Rust ButtonPress count</div><div class="value" id="clicks">0</div>
       <div class="semantic-controls" role="group" aria-label="Семантические элементы сцены и инспектора">
         <button type="button" id="masonry-action" data-semantic-id="pending">Активировать кнопку Masonry</button>
@@ -57,7 +58,7 @@
         <button type="button" id="toggle-present">Удалить кнопку Rust</button>
       </div>
       <button type="button" id="resize">Проверить resize (400 × 300)</button>
-      <p class="warn">Экспериментальный renderer: real RoundedRect и Affine. Есть Stroke (сплошной, без штриховки) и Clip (прямоугольный). Bezier-пути поддерживаются. В R4c DOM-кнопка проецирует реальный AccessKit NodeId/disabled/focus. R4d проверяет отдельный настоящий Masonry TextInput, UTF-8 и разделение IME preedit/commit в Rust; браузерный input является нативным текстовым адаптером (с ограниченными UTF-8 selection, undo/redo и IME-транзакциями). Универсальная AccessKit→DOM проекция, системный IME в виджете Rust, текстовые глифы, gradient и изображения пока не поддерживаются.</p>
+      <p class="warn">Экспериментальный renderer: real RoundedRect и Affine. Есть Stroke (сплошной, без штриховки) и Clip (прямоугольный). Bezier-пути поддерживаются. В R4c DOM-кнопка проецирует реальный AccessKit NodeId/disabled/focus. R4d проверяет отдельный настоящий Masonry TextInput, UTF-8 и разделение IME preedit/commit в Rust; браузерный input является нативным текстовым адаптером (с ограниченными UTF-8 selection, undo/redo и IME-транзакциями). Универсальная AccessKit→DOM проекция, системный IME в виджете Rust, полный конвейер шрифтов, CJK fallback, цветные глифы, gradient и изображения пока не поддерживаются.</p>
     </section>
   </div>
 </main>

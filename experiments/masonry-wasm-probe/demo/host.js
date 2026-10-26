@@ -51,6 +51,7 @@ const required=[
   'mp_version','mp_init','mp_resize','mp_pointer','mp_rect_count','mp_rect_x',
   'mp_rect_y','mp_rect_width','mp_rect_height','mp_rect_rgba',
   'mp_layer_count','mp_access_nodes','mp_skipped_draws',
+  'mp_glyph_runs','mp_outlined_glyphs',
   'mp_click_count','mp_width','mp_height',
   'mp_rect_local_x','mp_rect_local_y','mp_rect_local_width','mp_rect_local_height',
   'mp_rect_radius_tl','mp_rect_radius_tr','mp_rect_radius_br','mp_rect_radius_bl',
@@ -165,6 +166,7 @@ function snapshot(){
     layers:engine.mp_layer_count(),
     accessNodes:engine.mp_access_nodes(),
     skippedDraws:engine.mp_skipped_draws(),
+    glyphRuns:engine.mp_glyph_runs(),outlinedGlyphs:engine.mp_outlined_glyphs(),
     clicks:engine.mp_click_count(),rects:sceneRects(),ops:sceneOps(),
     semanticButtonId:engine.mp_semantic_button_id(),
     accessButtonId:String(engine.mp_access_button_id()),
@@ -324,6 +326,7 @@ function paint(){
   el('layers').textContent=String(scene.layers);
   el('rectangles').textContent=String(scene.rects.length)+' / '+scene.ops.length+' ops';
   el('access').textContent=String(scene.accessNodes);
+  el('glyph-runs').textContent=String(scene.glyphRuns)+' / '+String(scene.outlinedGlyphs)+' outlined';
   el('clicks').textContent=String(scene.clicks);
   lastSnapshot=scene;
 }

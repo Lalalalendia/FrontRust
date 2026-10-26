@@ -28,6 +28,30 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.ok(first.rects.length>=3);
     assert.equal(first.skippedDraws,0,'unsupported operations must fail the fidelity gate');
     assert.ok(first.ops.length>first.rects.length);
+    // R5a: the actual upstream Masonry Label must emit shaped GlyphRun IDs
+    // that are converted into vector glyph outlines, not JS fillText.
+    assert.ok(first.glyphRuns>0,'No real shaped Masonry GlyphRun');
+    assert.ok(first.outlinedGlyphs>=6,'Cyrillic glyph outlines were dropped');
+    const glyphPaths=first.rects.filter(r=>((r.rgba>>>0)&255)===35
+      &&((r.rgba>>>8)&255)===36&&((r.rgba>>>16)&255)===160);
+    assert.equal(glyphPaths.length,first.outlinedGlyphs);
+    assert.ok(glyphPaths.every(g=>g.path.length>=3&&g.path.length<=512
+      &&g.matrix.every(Number.isFinite)));
+    assert.equal(await page.locator('#glyph-runs').textContent(),
+      first.glyphRuns+' / '+first.outlinedGlyphs+' outlined');
+    const inkPixels=await page.evaluate(()=>{
+      const canvas=document.querySelector('#masonry-canvas');
+      const bytes=canvas.getContext('2d')
+        .getImageData(0,0,canvas.width,canvas.height).data;
+      let count=0;
+      for(let i=0;i<bytes.length;i+=4){
+        if(Math.abs(bytes[i]-35)<=8 && Math.abs(bytes[i+1]-36)<=8
+          && Math.abs(bytes[i+2]-160)<=8 && bytes[i+3]===255)count++;
+      }
+      return count;
+    });
+    assert.ok(inkPixels>=8,
+      'OpenType glyph outlines did not reach real Canvas pixels: '+inkPixels);
     let depth=0,maxDepth=0,greenDepth=0;
     const realGreen=first.rects.findIndex(r=>(r.rgba&255)===40&&((r.rgba>>>8)&255)===170);
     for(const op of first.ops){
@@ -557,7 +581,7 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
       window.__masonryProbe.snapshot().clicks),sceneBeforeEditor.clicks);
     assert.deepEqual(errors,[]);
     await page.screenshot({path:'test-results/masonry-'+name+'.png',fullPage:true});
-    console.log('PASS '+name+' R4f bounded undo/redo + R4e2 IME and earlier regression gates');
+    console.log('PASS '+name+' R5a actual glyph outlines in Canvas + R4f/R4e2 regression gates');
   }catch(error){
     await page.screenshot({path:'test-results/masonry-'+name+'-FAIL.png',fullPage:true}).catch(()=>{});
     console.error('FAIL '+name,error.stack,errors);throw error;

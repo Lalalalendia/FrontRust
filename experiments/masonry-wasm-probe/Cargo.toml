@@ -22,3 +22,6 @@ wasm-bindgen = "=0.2.129"
 masonry_core = { git = "https://github.com/linebender/xilem", rev = "271a27a6d4a930f7878d404f9014e3c50a3a9b88", default-features = false }
 masonry = { git = "https://github.com/linebender/xilem", rev = "271a27a6d4a930f7878d404f9014e3c50a3a9b88", default-features = false, optional = true }
 masonry_winit = { git = "https://github.com/linebender/xilem", rev = "271a27a6d4a930f7878d404f9014e3c50a3a9b88", default-features = false, optional = true }
+# Used only to convert actual shaped glyph IDs from imaging::record::GlyphRun
+# into bounded vector paths in the experimental Canvas2D bridge.
+skrifa = "=0.40.0"
