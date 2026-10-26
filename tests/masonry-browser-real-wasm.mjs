@@ -448,11 +448,18 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
       'late input or duplicate compositionend committed a second time');
     assert.equal(lateCommit.editorCommitted,'Привет 猫日本');
     await editor.fill('Привет X日本');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет X日本');
     await editor.evaluate(el=>el.setSelectionRange(7,8));
     await page.waitForFunction(()=>{
       const selection=window.__masonryProbe.snapshot().editorSelectionBytes;
       return selection?.start===13&&selection?.end===14;
     },null,{timeout:5000});
+    // Capture the counter AFTER an independent browser fill operation.
+    // Firefox may use a composition sequence for Unicode fill; cancellation
+    // must be tested against the *current transaction*, not against a
+    // counter from before a separate input operation.
+    const beforeCanceled=await page.evaluate(()=>window.__masonryProbe.snapshot());
     await editor.evaluate(el=>{
       el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));
       el.dispatchEvent(new CompositionEvent('compositionupdate',{bubbles:true,data:'未確定'}));
@@ -461,8 +468,8 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     const selectedCanceled=await page.evaluate(()=>window.__masonryProbe.snapshot());
     assert.equal(selectedCanceled.editorCommitted,'Привет X日本');
     assert.equal(selectedCanceled.editorLive,'Привет X日本');
-    assert.equal(selectedCanceled.editorCommits,selectedCommitted.editorCommits,
-      'cancel incremented commit count');
+    assert.equal(selectedCanceled.editorCommits,beforeCanceled.editorCommits,
+      'cancel must not commit the currently selected preedit');
     // A composition abandoned by blur must also leave the selected text.
     // An HTML input may already hold [7,8] after canceled composition.
     // Setting the same range does NOT guarantee another asynchronous 'select'
@@ -481,6 +488,8 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     const afterBlur=await page.evaluate(()=>window.__masonryProbe.snapshot());
     assert.equal(afterBlur.editorCommitted,'Привет X日本');
     assert.equal(afterBlur.editorLive,'Привет X日本');
+    assert.equal(afterBlur.editorCommits,beforeCanceled.editorCommits,
+      'blur must not commit abandoned preedit');
     const afterSplice=afterBlur;
     assert.equal(afterSplice.clicks,sceneBeforeEditor.clicks);
     assert.equal(afterSplice.keyboardEvents,sceneBeforeEditor.keyboardEvents);
