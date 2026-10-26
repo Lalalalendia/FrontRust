@@ -390,9 +390,19 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.deepEqual(await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),[8,8],
       'selected emoji deletion did not preserve collapsed caret');
     await editor.evaluate(el=>el.setSelectionRange(7,8));
-    await page.keyboard.type('猫');
-    await page.waitForFunction(()=>
-      window.__masonryProbe.snapshot().editorCommitted==='Привет 猫日本');
+    assert.deepEqual(await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),[7,8],
+      'Firefox/Chromium must preserve native selected UTF-16 range');
+    // Playwright keyboard.type('猫') emulates key presses for a character
+    // without a portable physical keyboard key. Firefox may insert it at
+    // EOF instead of replacing the selection. insertText uses the browser's
+    // native Unicode insertion path (input event, not a forged DOM event).
+    // Actual OS IME remains a separate acceptance gate.
+    await page.keyboard.insertText('猫');
+    const cjkInsert=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(cjkInsert.editorCommitted,'Привет 猫日本',
+      'CJK insertion must replace the middle selection: '+JSON.stringify({
+        rust:cjkInsert.editorCommitted,dom:await editor.inputValue(),
+        selection:await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),errors}));
     assert.deepEqual(await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),[8,8]);
     assert.equal(await editor.inputValue(),'Привет 猫日本');
     const afterSplice=await page.evaluate(()=>window.__masonryProbe.snapshot());
