@@ -13,6 +13,10 @@ let beforeEditorInput=null;
 let editorCompositionCaret=null;
 let editorStableSelection=null;
 let editorLastNoncollapsedSelection=null;
+// A compositionend may be followed by stale browser input before the next
+// animation frame. During this brief window, a newly accepted Rust IME
+// commit MUST NOT be overwritten by an echo of the old DOM input value.
+let editorCompositionEchoGuard=false;
 const encoder=new TextEncoder();
 function utf8Length(text){return encoder.encode(text).length;}
 function utf16ByteOffset(text,offset){
@@ -240,6 +244,8 @@ function paint(){
   validateScene(scene);
   syncAccessProjection(scene);
   syncTextProjection(scene);
+  // New user edits after this paint are separate input transactions.
+  editorCompositionEchoGuard=false;
   ctx.fillStyle='#f8fbff';
   ctx.fillRect(0,0,canvas.width,canvas.height);
   // The scene is an ORDERED command stream. A clip is an actual Canvas
@@ -400,6 +406,9 @@ try{
   textEditor.addEventListener('pointerup',explicitCaretMove);
   textEditor.addEventListener('beforeinput',event=>{
     if(editorCompositionActive||event.isComposing)return;
+    // A fresh beforeinput starts an independently owned edit. It is not
+    // the late no-beforeinput echo of a completed IME transaction.
+    editorCompositionEchoGuard=false;
     const source=engine.mp_editor_committed_text();
     beforeEditorInput=textEditor.value===source
       ?{source,start:textEditor.selectionStart,end:textEditor.selectionEnd}
@@ -408,6 +417,7 @@ try{
   textEditor.addEventListener('blur',()=>{
     beforeEditorInput=null;
     editorCompositionCaret=null;
+    editorCompositionEchoGuard=false;
     editorStableSelection=null;
     editorLastNoncollapsedSelection=null;
     if(editorCompositionActive){
@@ -435,6 +445,7 @@ try{
     const rc=engine.mp_editor_begin_composition(start,end);
     if(rc!==1)throw Error('Masonry IME range rejected: '+rc);
     beforeEditorInput=null;
+    editorCompositionEchoGuard=false;
     editorCompositionCaret=capture.start;
     editorCompositionActive=true;
     editorStableSelection=null;
@@ -459,12 +470,24 @@ try{
     editorLastNoncollapsedSelection=null;
     if(editorCompositionCaret!==null && event.data)
       editorCompositionCaret+=event.data.length; // UTF-16 caret after committed IME text
+    // Synthetic and some native compositionend lifecycles leave the DOM
+    // input holding its pre-commit value until a later input/paint event.
+    // Project the accepted Rust document immediately to close that race.
+    syncTextProjection(snapshot());
+    editorCompositionEchoGuard=true;
     updateFocusLabels();requestPaint();
   });
   textEditor.addEventListener('input',event=>{
     if(editorCompositionActive||event.isComposing||event.inputType==='insertCompositionText')
       return;
     const oldValue=engine.mp_editor_committed_text();
+    if(editorCompositionEchoGuard && !beforeEditorInput){
+      // An input without a fresh beforeinput, delivered in the same frame
+      // after IME termination, cannot replace a verified Rust commit with
+      // the stale HTMLInputElement text (Firefox/Chromium ordering fence).
+      if(textEditor.value!==oldValue)textEditor.value=oldValue;
+      syncEditorSelection();requestPaint();return;
+    }
     if(event.inputType==='insertFromComposition'){
       // Some engines deliver the final input after compositionend. Rust
       // already handled Commit: never insert the composed text twice.
