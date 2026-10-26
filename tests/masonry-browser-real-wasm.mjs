@@ -303,6 +303,12 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     const resized=await page.evaluate(()=>window.__masonryProbe.snapshot());
     assert.equal(resized.height,300);
     assert.ok(resized.rects.some(r=>(r.rgba&255)===70));
+    const resizedGlyphs=resized.rects.filter(r=>(r.rgba&255)===35
+      &&((r.rgba>>>8)&255)===36&&((r.rgba>>>16)&255)===160);
+    assert.equal(resizedGlyphs.length,resized.outlinedGlyphs);
+    assert.ok(resizedGlyphs.length>=6
+      &&resizedGlyphs.every(g=>g.y>=0&&g.y+g.height<=292),
+      'Masonry Cyrillic label is clipped or too close to the 300px Canvas edge');
     // R4c: live AccessKit properties and actual Rust widget lifecycle must
     // project to DOM. Execute while the semantic button OWNS focus.
     await semantic.focus();

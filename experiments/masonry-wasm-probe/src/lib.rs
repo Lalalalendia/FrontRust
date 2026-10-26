@@ -296,8 +296,22 @@ mod browser_host {
                     ))
                     .with_props(PropertySet::one(Dimensions::fixed(65.px(), 50.px())))
                 )
-                // Keep the 80px-tall curve widget within the initial 240px
-                // browser canvas: place it BESIDE the 64px disclosure arrow.
+                // Reserve visible space for the shaped Cyrillic label also
+                // after the user resizes the scene to 400x300. It must not
+                // ride on the bottom border of the smaller canvas.
+                .with_fixed(
+                    NewWidget::new(
+                        Label::new("Привет")
+                            .with_style(StyleProperty::FontFamily(FontFamily::Single(
+                                FontFamilyName::Named("FrontRust Demo Subset".into())
+                            )))
+                            .with_hint(false)
+                    ).with_props(PropertySet::one(
+                        ContentColor::new(Color::from_rgb8(35, 36, 160))
+                    ))
+                )
+                // Keep the curves in a shared row below text, beside
+                // the disclosure arrow, without occluding either.
                 .with_fixed(Flex::row()
                     .with_fixed(
                         NewWidget::new(DisclosureButton::new(false))
@@ -314,17 +328,6 @@ mod browser_host {
                             .with_props(PropertySet::one(Dimensions::fixed(120.px(),80.px())))
                     )
                     .prepare()
-                )
-                .with_fixed(
-                    NewWidget::new(
-                        Label::new("Привет")
-                            .with_style(StyleProperty::FontFamily(FontFamily::Single(
-                                FontFamilyName::Named("FrontRust Demo Subset".into())
-                            )))
-                            .with_hint(false)
-                    ).with_props(PropertySet::one(
-                        ContentColor::new(Color::from_rgb8(35, 36, 160))
-                    ))
                 )
                 .prepare().with_tag(root_tag);
             let clicks = Rc::new(Cell::new(0_i32));
@@ -1598,6 +1601,10 @@ mod browser_host {
             h.resize(400, 300);
             assert_eq!(h.skipped_draws, 0);
             assert!(h.outlined_glyphs >= 6);
+            let ink_after = h.rects.iter().filter(|r| r.rgba == ink).collect::<Vec<_>>();
+            assert!(ink_after.iter().all(|r| r.y >= 0.0
+                && r.y + r.height <= 292.0),
+                "outlined text must have >=8px clearance in the 300px canvas");
         }
 
         #[test]
