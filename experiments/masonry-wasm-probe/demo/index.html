@@ -48,15 +48,16 @@
         <label for="masonry-text-editor">Masonry TextInput (R4d: браузерный ввод → Rust TextArea)</label>
         <input id="masonry-text-editor" type="text" autocomplete="off" spellcheck="false" placeholder="Привет / 日本 / 🌍">
         <span class="meta">Rust committed: <output id="rust-editor-committed"></output></span>
-        <span class="meta">Rust preview (append-only preedit): <output id="rust-editor-live"></output></span>
+        <span class="meta">Rust preview (selection-aware preedit): <output id="rust-editor-live"></output></span>
         <span class="meta">Rust IME commits: <output id="rust-editor-commits">0</output></span>
+        <span class="meta">Undo / Redo: <output id="rust-editor-undo-depth">0</output> / <output id="rust-editor-redo-depth">0</output> (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z)</span>
         <span class="meta" id="focus-owner">Фокус: вне сцены</span>
         <span class="meta" id="composition-state">IME: неактивна</span>
         <button type="button" id="toggle-disabled">Отключить кнопку Rust</button>
         <button type="button" id="toggle-present">Удалить кнопку Rust</button>
       </div>
       <button type="button" id="resize">Проверить resize (400 × 300)</button>
-      <p class="warn">Экспериментальный renderer: real RoundedRect и Affine. Есть Stroke (сплошной, без штриховки) и Clip (прямоугольный). Bezier-пути поддерживаются. В R4c DOM-кнопка проецирует реальный AccessKit NodeId/disabled/focus. R4d проверяет отдельный настоящий Masonry TextInput, UTF-8 и разделение IME preedit/commit в Rust; браузерный input является нативным текстовым адаптером (без поддержки произвольных selections). Универсальная AccessKit→DOM проекция, системный IME в виджете Rust, текстовые глифы, gradient и изображения пока не поддерживаются.</p>
+      <p class="warn">Экспериментальный renderer: real RoundedRect и Affine. Есть Stroke (сплошной, без штриховки) и Clip (прямоугольный). Bezier-пути поддерживаются. В R4c DOM-кнопка проецирует реальный AccessKit NodeId/disabled/focus. R4d проверяет отдельный настоящий Masonry TextInput, UTF-8 и разделение IME preedit/commit в Rust; браузерный input является нативным текстовым адаптером (с ограниченными UTF-8 selection, undo/redo и IME-транзакциями). Универсальная AccessKit→DOM проекция, системный IME в виджете Rust, текстовые глифы, gradient и изображения пока не поддерживаются.</p>
     </section>
   </div>
 </main>

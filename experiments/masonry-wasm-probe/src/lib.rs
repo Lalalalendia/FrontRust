@@ -154,6 +154,13 @@ mod browser_host {
         Blob::new(Arc::new(bytes))
     }
 
+    #[derive(Debug, Clone)]
+    struct EditorEdit {
+        start: usize,
+        removed: String,
+        inserted: String,
+    }
+
     pub struct BrowserHost {
         root: RenderRoot,
         // A separate genuine Masonry TextInput RenderRoot. Its glyph drawing
@@ -167,6 +174,9 @@ mod browser_host {
         editor_composition_range: Option<(usize, usize)>,
         editor_commits: i32,
         editor_actions: Rc<Cell<i32>>,
+        undo_stack: Vec<EditorEdit>,
+        redo_stack: Vec<EditorEdit>,
+        history_muted: bool,
         rects: Vec<SolidRect>,
         ops: Vec<SceneOp>,
         scene_layers: i32,
@@ -329,6 +339,8 @@ mod browser_host {
                 editor_composing: false, editor_preedit: String::new(),
                 editor_composition_range: None,
                 editor_commits: 0, editor_actions,
+                undo_stack: Vec::new(), redo_stack: Vec::new(),
+                history_muted: false,
                 rects: Vec::new(), ops: Vec::new(), scene_layers: 0,
                 accessibility_nodes: 0, accessible_button: false,
                 access_button_id: None, access_button_disabled: false, access_focus_id: 0,
@@ -688,18 +700,109 @@ mod browser_host {
             1
         }
 
-        // This full-value path is deliberately bounded. `reset_text`
-        // moves the Rust caret to the end; arbitrary selection/rich text is
-        // not yet a supported feature of this BrowserHost.
+        // All accepted full-value replacement also passes through a genuine
+        // TextArea selection and ClipboardPaste, without a full editor reset.
         pub fn editor_replace(&mut self, text: &str) -> i32 {
             let accepted = self.editor_accepts(text);
             if accepted < 0 { return accepted; }
-            let tag = self.editor_tag;
-            self.text_root.edit_widget_with_tag(tag, |mut area| {
-                TextArea::reset_text(&mut area, text);
-            });
-            let _ = self.text_root.redraw();
-            self.editor_committed = self.editor_document_text();
+            let len = self.editor_document_text().len();
+            self.editor_splice(0, len, text)
+        }
+
+        fn record_edit(&mut self, start: usize, removed: String, inserted: String) {
+            if self.history_muted || removed == inserted { return; }
+            self.undo_stack.push(EditorEdit { start, removed, inserted });
+            if self.undo_stack.len() > 64 { self.undo_stack.remove(0); }
+            self.redo_stack.clear();
+        }
+
+        // Standalone IME commits have no externally provided range. Use
+        // Unicode-scalar boundaries for one canonical text transition.
+        fn record_text_transition(&mut self, before: &str, after: &str) {
+            let mut prefix = 0;
+            for (a, b) in before.chars().zip(after.chars()) {
+                if a != b { break; }
+                prefix += a.len_utf8();
+            }
+            let mut suffix = 0;
+            for (a, b) in before[prefix..].chars().rev()
+                .zip(after[prefix..].chars().rev()) {
+                if a != b { break; }
+                suffix += a.len_utf8();
+            }
+            self.record_edit(
+                prefix,
+                before[prefix..before.len()-suffix].to_owned(),
+                after[prefix..after.len()-suffix].to_owned(),
+            );
+        }
+
+        fn editor_restore_snapshot(&mut self) -> i32 {
+            let canonical = self.editor_committed.clone();
+            let current = self.editor_document_text();
+            if current == canonical { return 1; }
+            // Compensating TextArea splice restores ONLY differing bytes,
+            // not the entire editor widget. This internal repair is omitted
+            // from the app-level undo journal.
+            let mut prefix = 0;
+            for (a, b) in current.chars().zip(canonical.chars()) {
+                if a != b { break; }
+                prefix += a.len_utf8();
+            }
+            let mut suffix = 0;
+            for (a, b) in current[prefix..].chars().rev()
+                .zip(canonical[prefix..].chars().rev()) {
+                if a != b { break; }
+                suffix += a.len_utf8();
+            }
+            let old_muted = self.history_muted;
+            self.history_muted = true;
+            let result = self.editor_splice(
+                prefix, current.len() - suffix,
+                &canonical[prefix..canonical.len() - suffix],
+            );
+            self.history_muted = old_muted;
+            if result != 1 || self.editor_document_text() != canonical { return -5; }
+            1
+        }
+
+        pub fn editor_undo(&mut self) -> i32 {
+            if self.editor_focused() != 1 { return -1; }
+            if self.editor_composing { return -3; }
+            let Some(edit) = self.undo_stack.pop() else { return -7; };
+            let Some(end) = edit.start.checked_add(edit.inserted.len()) else {
+                self.undo_stack.push(edit); return -4;
+            };
+            if self.editor_document_text().get(edit.start..end)
+                != Some(edit.inserted.as_str()) {
+                self.undo_stack.push(edit); return -5;
+            }
+            let old_muted = self.history_muted;
+            self.history_muted = true;
+            let result = self.editor_splice(edit.start, end, &edit.removed);
+            self.history_muted = old_muted;
+            if result != 1 { self.undo_stack.push(edit); return result; }
+            self.redo_stack.push(edit);
+            1
+        }
+
+        pub fn editor_redo(&mut self) -> i32 {
+            if self.editor_focused() != 1 { return -1; }
+            if self.editor_composing { return -3; }
+            let Some(edit) = self.redo_stack.pop() else { return -7; };
+            let Some(end) = edit.start.checked_add(edit.removed.len()) else {
+                self.redo_stack.push(edit); return -4;
+            };
+            if self.editor_document_text().get(edit.start..end)
+                != Some(edit.removed.as_str()) {
+                self.redo_stack.push(edit); return -5;
+            }
+            let old_muted = self.history_muted;
+            self.history_muted = true;
+            let result = self.editor_splice(edit.start, end, &edit.inserted);
+            self.history_muted = old_muted;
+            if result != 1 { self.redo_stack.push(edit); return result; }
+            self.undo_stack.push(edit);
             1
         }
 
@@ -753,6 +856,9 @@ mod browser_host {
                 return -6; // Never silently accept a bypass of Masonry TextAction.
             }
             self.editor_committed = actual;
+            if expected != before {
+                self.record_edit(start, before[start..end].to_owned(), inserted.to_owned());
+            }
             1
         }
 
@@ -793,22 +899,26 @@ mod browser_host {
 
         pub fn editor_commit(&mut self, text: &str) -> i32 {
             if self.editor_focused() != 1 { return -1; }
-            if text.len() > 4096 { return -2; }
+            let before = self.editor_committed.clone();
+            if before.len().saturating_add(text.len()) > 4096 { return -2; }
             self.text_root.handle_text_event(TextEvent::Ime(
                 Ime::Commit(text.to_owned())
             ));
             self.editor_composing = false;
             self.editor_preedit.clear();
+            self.editor_composition_range = None;
             let _ = self.text_root.redraw();
-            self.editor_committed = self.editor_document_text();
+            let actual = self.editor_document_text();
+            if actual.len() > 4096 { return -2; }
+            self.record_text_transition(&before, &actual);
+            self.editor_committed = actual;
             self.editor_commits = self.editor_commits.saturating_add(1);
             1
         }
 
         // Parley temporarily replaces the selected range with preedit.
-        // Restore the canonical document when that transient range changes
-        // its length; then apply the original selection via real IME Commit.
-        // Recovery may reset undo history: this is still a bounded experiment.
+        // Restore only changed bytes before reapplying genuine IME Commit;
+        // internal recovery must not create a separate history transaction.
         pub fn editor_commit_selection(&mut self, inserted: &str) -> i32 {
             if self.editor_focused() != 1 { return -1; }
             if !self.editor_composing { return -3; }
@@ -826,13 +936,8 @@ mod browser_host {
             self.editor_composing = false;
             self.editor_preedit.clear();
             self.editor_composition_range = None;
-            if self.editor_document_text() != before {
-                let tag = self.editor_tag;
-                self.text_root.edit_widget_with_tag(tag, |mut area| {
-                    TextArea::reset_text(&mut area, &before);
-                });
-                let _ = self.text_root.redraw();
-            }
+            let restored = self.editor_restore_snapshot();
+            if restored != 1 { return restored; }
             let selected = self.editor_select_range(start, end);
             if selected != 1 { return selected; }
             let actions_before = self.editor_actions.get();
@@ -842,16 +947,13 @@ mod browser_host {
             let _ = self.text_root.redraw();
             let actual = self.editor_document_text();
             if actual != expected || self.editor_actions.get() <= actions_before {
-                let tag = self.editor_tag;
-                self.text_root.edit_widget_with_tag(tag, |mut area| {
-                    TextArea::reset_text(&mut area, &before);
-                });
-                let _ = self.text_root.redraw();
+                let _ = self.editor_restore_snapshot();
                 #[cfg(not(target_arch = "wasm32"))]
-                eprintln!("R4e2 IME selection mismatch: before={before:?} range=({start},{end}) inserted={inserted:?} expected={expected:?} actual={actual:?}");
+                eprintln!("R4f IME selection mismatch: before={before:?} range=({start},{end}) inserted={inserted:?} expected={expected:?} actual={actual:?}");
                 return -5;
             }
             self.editor_committed = actual;
+            self.record_edit(start, before[start..end].to_owned(), inserted.to_owned());
             self.editor_commits = self.editor_commits.saturating_add(1);
             1
         }
@@ -863,15 +965,9 @@ mod browser_host {
             self.editor_composing = false;
             self.editor_preedit.clear();
             self.editor_composition_range = None;
-            if self.editor_document_text() != self.editor_committed {
-                let before = self.editor_committed.clone();
-                let tag = self.editor_tag;
-                self.text_root.edit_widget_with_tag(tag, |mut area| {
-                    TextArea::reset_text(&mut area, &before);
-                });
-            }
+            let restored = self.editor_restore_snapshot();
             let _ = self.text_root.redraw();
-            if self.editor_document_text() != self.editor_committed { return -5; }
+            if restored != 1 || self.editor_document_text() != self.editor_committed { return -5; }
             1
         }
 
@@ -1090,6 +1186,29 @@ mod browser_host {
     pub extern "C" fn mp_editor_cancel() -> i32 {
         HOST.with(|h| h.borrow_mut().as_mut()
             .map(|host| host.editor_cancel()).unwrap_or(-1))
+    }
+
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_undo() -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_undo()).unwrap_or(-1))
+    }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_redo() -> i32 {
+        HOST.with(|h| h.borrow_mut().as_mut()
+            .map(|host| host.editor_redo()).unwrap_or(-1))
+    }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_undo_depth() -> i32 {
+        get_i32(|h| h.undo_stack.len() as i32)
+    }
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn mp_editor_redo_depth() -> i32 {
+        get_i32(|h| h.redo_stack.len() as i32)
     }
 
     // SAFETY: ABI function uses only scalar arguments/results and no raw pointers.
@@ -1375,6 +1494,50 @@ mod browser_host {
             assert!(h.rects.iter().any(|r|
                 r.rgba == Color::from_rgb8(70,120,210).to_rgba8().to_u32()),
                 "valid independent widgets must still be retained");
+        }
+
+        #[test]
+        fn r4f_real_textarea_journal_undo_redo_and_ime_without_reset() {
+            let mut h = BrowserHost::new(320, 360);
+            assert_eq!(h.editor_undo(), -1, "unfocused undo must fail closed");
+            assert_eq!(h.editor_focus(true), 1);
+            assert_eq!(h.editor_undo(), -7, "empty history must be a no-op");
+            assert_eq!(h.editor_replace("Привет X日本"), 1);
+            let initial = h.undo_stack.len();
+            assert_eq!(h.editor_begin_composition(13, 14), 1);
+            assert_eq!(h.editor_update_preedit("猫"), 1);
+            assert_eq!(h.editor_undo(), -3, "undo during IME composition must fail");
+            assert_eq!(h.editor_cancel(), 1);
+            assert_eq!(h.editor_document_text(), "Привет X日本");
+            assert_eq!(h.undo_stack.len(), initial,
+                "canceled preedit/rollback must not enter undo history");
+            assert_eq!(h.editor_begin_composition(13, 14), 1);
+            assert_eq!(h.editor_update_preedit("猫"), 1);
+            assert_eq!(h.editor_commit_selection("猫"), 1);
+            assert_eq!(h.undo_stack.len(), initial + 1,
+                "committed selected IME must be ONE history transaction");
+            assert_eq!(h.editor_committed, "Привет 猫日本");
+            let commits = h.editor_commits;
+            assert_eq!(h.editor_undo(), 1);
+            assert_eq!(h.editor_document_text(), "Привет X日本");
+            assert_eq!(h.editor_commits, commits);
+            assert_eq!(h.editor_redo(), 1);
+            assert_eq!(h.editor_document_text(), "Привет 猫日本");
+            assert_eq!(h.editor_commits, commits);
+            assert_eq!(h.editor_undo(), 1);
+            assert_eq!(h.editor_splice(13, 14, "ж"), 1,
+                "a new edit must invalidate the redo branch");
+            assert_eq!(h.editor_committed, "Привет ж日本");
+            assert_eq!(h.editor_redo(), -7);
+            assert_eq!(h.editor_focus(false), 0);
+            assert_eq!(h.editor_undo(), -1);
+            let mut bounded = BrowserHost::new(320, 360);
+            assert_eq!(bounded.editor_focus(true), 1);
+            for _ in 0..80 {
+                let end = bounded.editor_document_text().len();
+                assert_eq!(bounded.editor_splice(end, end, "a"), 1);
+            }
+            assert_eq!(bounded.undo_stack.len(), 64, "journal must be bounded");
         }
 
         #[test]

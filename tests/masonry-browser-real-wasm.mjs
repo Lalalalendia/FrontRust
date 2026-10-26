@@ -501,9 +501,63 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     const afterSplice=afterBlur;
     assert.equal(afterSplice.clicks,sceneBeforeEditor.clicks);
     assert.equal(afterSplice.keyboardEvents,sceneBeforeEditor.keyboardEvents);
+
+    // R4f: accepted IME replacement forms ONE app-level Rust undo unit.
+    // Undo and redo must reach the real TextArea, not the browser input's
+    // independent native history; cancellation never creates an undo unit.
+    await editor.focus();
+    await editor.fill('Привет X日本');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет X日本');
+    const beforeHistory=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    await editor.evaluate(el=>el.setSelectionRange(7,8));
+    assert.deepEqual(await page.evaluate(()=>
+      window.__masonryProbe.snapshot().editorSelectionBytes),{start:13,end:14});
+    await editor.evaluate(el=>{
+      el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));
+      el.dispatchEvent(new CompositionEvent('compositionupdate',{bubbles:true,data:'猫'}));
+      el.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'猫'}));
+    });
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет 猫日本');
+    const afterHistoryCommit=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(afterHistoryCommit.editorUndoDepth,beforeHistory.editorUndoDepth+1,
+      'selected preedit/commit must be exactly one undo transaction');
+    const committedCount=afterHistoryCommit.editorCommits;
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет X日本');
+    assert.equal(await editor.inputValue(),'Привет X日本');
+    assert.equal(await page.evaluate(()=>
+      window.__masonryProbe.snapshot().editorRedoDepth),1);
+    await page.keyboard.press('Control+Shift+z');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет 猫日本');
+    assert.equal(await editor.inputValue(),'Привет 猫日本');
+    assert.equal(await page.evaluate(()=>
+      window.__masonryProbe.snapshot().editorCommits),committedCount,
+      'undo/redo must never count as another IME commit');
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет X日本');
+    await editor.evaluate(el=>el.setSelectionRange(7,8));
+    await page.keyboard.insertText('ж');
+    await page.waitForFunction(()=>
+      window.__masonryProbe.snapshot().editorCommitted==='Привет ж日本');
+    assert.equal(await page.evaluate(()=>
+      window.__masonryProbe.snapshot().editorRedoDepth),0,
+      'new ordinary edit must invalidate the redo branch');
+    await page.keyboard.press('Control+Shift+z');
+    assert.equal(await page.evaluate(()=>
+      window.__masonryProbe.snapshot().editorCommitted),'Привет ж日本');
+    await editor.blur();
+    assert.equal(await page.evaluate(()=>
+      window.__masonryProbe.snapshot().editorFocused),0);
+    assert.equal(await page.evaluate(()=>
+      window.__masonryProbe.snapshot().clicks),sceneBeforeEditor.clicks);
     assert.deepEqual(errors,[]);
     await page.screenshot({path:'test-results/masonry-'+name+'.png',fullPage:true});
-    console.log('PASS '+name+' R4e2 selected IME commit/cancel/blur + R4e Unicode splice + R4d/R4c/R3b');
+    console.log('PASS '+name+' R4f bounded undo/redo + R4e2 IME and earlier regression gates');
   }catch(error){
     await page.screenshot({path:'test-results/masonry-'+name+'-FAIL.png',fullPage:true}).catch(()=>{});
     console.error('FAIL '+name,error.stack,errors);throw error;

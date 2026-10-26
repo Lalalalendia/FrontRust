@@ -68,7 +68,9 @@ const required=[
   'mp_editor_commit','mp_editor_cancel','mp_editor_committed_text',
   'mp_editor_live_text','mp_editor_commits','mp_editor_actions',
   'mp_editor_select_range','mp_editor_splice',
-  'mp_editor_begin_composition','mp_editor_commit_selection'
+  'mp_editor_begin_composition','mp_editor_commit_selection',
+  'mp_editor_undo','mp_editor_redo',
+  'mp_editor_undo_depth','mp_editor_redo_depth'
 ];
 
 
@@ -176,6 +178,8 @@ function snapshot(){
     editorComposing:engine.mp_editor_composing(),
     editorCommits:engine.mp_editor_commits(),
     editorActions:engine.mp_editor_actions(),
+    editorUndoDepth:engine.mp_editor_undo_depth(),
+    editorRedoDepth:engine.mp_editor_redo_depth(),
     editorSelectionBytes:projectedEditorSelection(),
     composing:compositionActive||editorCompositionActive,owner:focusOwner()};
 }
@@ -224,6 +228,8 @@ function syncTextProjection(scene){
   el('rust-editor-committed').textContent=scene.editorCommitted;
   el('rust-editor-live').textContent=scene.editorLive;
   el('rust-editor-commits').textContent=String(scene.editorCommits);
+  el('rust-editor-undo-depth').textContent=String(scene.editorUndoDepth);
+  el('rust-editor-redo-depth').textContent=String(scene.editorRedoDepth);
   if(!editorCompositionActive && textEditor.value!==scene.editorCommitted){
     const currentStart=textEditor.selectionStart;
     const currentEnd=textEditor.selectionEnd;
@@ -396,6 +402,33 @@ try{
     syncEditorSelection();
     updateFocusLabels();requestPaint();
   });
+  function runEditorHistory(kind){
+    const method=kind==='undo'?'mp_editor_undo':'mp_editor_redo';
+    const result=engine[method]();
+    if(result===-7)return result; // Empty stack; suppress browser-native history.
+    if(result!==1)throw Error('Masonry '+kind+' rejected: '+result);
+    beforeEditorInput=null;
+    editorStableSelection=null;
+    editorLastNoncollapsedSelection=null;
+    editorCompositionEchoGuard=false;
+    // The canonical document and app-level journal belong to Rust.
+    // Browser-native history must never independently mutate the HTML input.
+    syncTextProjection(snapshot());
+    syncEditorSelection();
+    requestPaint();
+    return result;
+  }
+  textEditor.addEventListener('keydown',event=>{
+    const modifier=(event.ctrlKey||event.metaKey)&&!event.altKey;
+    const key=event.key.toLowerCase();
+    const undo=modifier&&key==='z'&&!event.shiftKey;
+    const redo=modifier&&((key==='z'&&event.shiftKey)
+      ||(key==='y'&&!event.shiftKey));
+    if(!undo&&!redo)return;
+    event.preventDefault();
+    if(editorCompositionActive||event.isComposing)return;
+    runEditorHistory(undo?'undo':'redo');
+  });
   textEditor.addEventListener('select',syncEditorSelection);
   const explicitCaretMove=()=>{
     syncEditorSelection();
@@ -405,6 +438,10 @@ try{
   textEditor.addEventListener('keyup',explicitCaretMove);
   textEditor.addEventListener('pointerup',explicitCaretMove);
   textEditor.addEventListener('beforeinput',event=>{
+    if(event.inputType==='historyUndo'||event.inputType==='historyRedo'){
+      event.preventDefault(); // Ctrl/Meta shortcuts route to Rust on keydown.
+      return;
+    }
     if(editorCompositionActive||event.isComposing)return;
     // A fresh beforeinput starts an independently owned edit. It is not
     // the late no-beforeinput echo of a completed IME transaction.

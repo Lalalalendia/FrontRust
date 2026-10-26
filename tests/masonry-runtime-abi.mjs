@@ -31,7 +31,9 @@ const symbols=[
   'mp_editor_replace','mp_editor_preedit','mp_editor_update_preedit',
   'mp_editor_commit','mp_editor_cancel','mp_editor_committed_text',
   'mp_editor_live_text','mp_editor_commits','mp_editor_actions',
-  'mp_editor_select_range','mp_editor_splice'
+  'mp_editor_select_range','mp_editor_splice',
+  'mp_editor_undo','mp_editor_redo',
+  'mp_editor_undo_depth','mp_editor_redo_depth'
 ];
 for(const s of symbols)assert.equal(typeof e[s],'function','missing exported '+s);
 assert.equal(e.mp_version(),1);
@@ -284,3 +286,35 @@ assert.equal(e.mp_editor_cancel(),1);
 assert.equal(e.mp_editor_committed_text(),source);
 assert.equal(e.mp_click_count(),clicksBeforeIme,'IME text activated the scene');
 console.log('PASS R4e2 selected IME commit/rollback, Unicode boundaries and dedupe (Node WASM)');
+
+// R4f: one accepted IME replacement is one bounded undo transaction.
+// Transient preedit, IME cancel and recovery must not pollute the journal.
+assert.equal(e.mp_editor_replace(source),1);
+const historyBaseline=e.mp_editor_undo_depth();
+const commitsBaseline=e.mp_editor_commits();
+assert.equal(e.mp_editor_begin_composition(13,14),1);
+assert.equal(e.mp_editor_update_preedit('未確定'),1);
+assert.equal(e.mp_editor_undo(),-3,'undo during composition should fail closed');
+assert.equal(e.mp_editor_cancel(),1);
+assert.equal(e.mp_editor_committed_text(),source);
+assert.equal(e.mp_editor_undo_depth(),historyBaseline);
+assert.equal(e.mp_editor_begin_composition(13,14),1);
+assert.equal(e.mp_editor_update_preedit('猫'),1);
+assert.equal(e.mp_editor_commit_selection('猫'),1);
+assert.equal(e.mp_editor_committed_text(),'Привет 猫日本');
+assert.equal(e.mp_editor_undo_depth(),historyBaseline+1);
+assert.equal(e.mp_editor_commits(),commitsBaseline+1);
+assert.equal(e.mp_editor_undo(),1);
+assert.equal(e.mp_editor_committed_text(),source);
+assert.equal(e.mp_editor_redo_depth(),1);
+assert.equal(e.mp_editor_redo(),1);
+assert.equal(e.mp_editor_committed_text(),'Привет 猫日本');
+assert.equal(e.mp_editor_commits(),commitsBaseline+1,
+  'undo/redo must not replay IME commit count');
+assert.equal(e.mp_editor_undo(),1);
+assert.equal(e.mp_editor_splice(13,14,'ж'),1);
+assert.equal(e.mp_editor_committed_text(),'Привет ж日本');
+assert.equal(e.mp_editor_redo(),-7,'new edit must invalidate redo branch');
+assert.equal(e.mp_editor_focus(0),0);
+assert.equal(e.mp_editor_undo(),-1,'unfocused history operations must fail closed');
+console.log('PASS R4f bounded Rust TextArea undo/redo over selected IME and cancel without reset (Node WASM)');
