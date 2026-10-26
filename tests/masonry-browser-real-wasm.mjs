@@ -253,8 +253,13 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.match(rejected[0],/Partial Masonry scene/);
     assert.match(rejected[1],/Oversized Masonry path/);
     const canvas=page.locator('#masonry-canvas');
+    // The R5b font buttons can scroll this tall demo panel downward.
+    // page.mouse.click uses viewport coordinates and does NOT scroll a
+    // target into view automatically, unlike Locator.click(). Re-expose
+    // the real Canvas BEFORE translating the retained Rust target coords.
+    await canvas.scrollIntoViewIfNeeded();
     const box=await canvas.boundingBox();
-    assert.ok(box);
+    assert.ok(box && box.width>0 && box.height>0);
     await page.mouse.click(box.x+(brown.x+brown.width/2)*box.width/first.width,
       box.y+(brown.y+brown.height/2)*box.height/first.height);
     // Rust action is synchronous; DOM is intentionally committed on requestAnimationFrame.
