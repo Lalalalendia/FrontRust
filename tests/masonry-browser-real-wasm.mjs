@@ -253,18 +253,30 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.match(rejected[0],/Partial Masonry scene/);
     assert.match(rejected[1],/Oversized Masonry path/);
     const canvas=page.locator('#masonry-canvas');
-    // The R5b font buttons can scroll this tall demo panel downward.
-    // page.mouse.click uses viewport coordinates and does NOT scroll a
-    // target into view automatically, unlike Locator.click(). Re-expose
-    // the real Canvas BEFORE translating the retained Rust target coords.
+    // Font controls may scroll the page or cause a Rust relayout. Use the
+    // CURRENT RenderRoot scene for hit testing, not the initial paint and
+    // stale viewport coordinates. Playwright Locator.click performs a real
+    // browser pointer action and scrolls the canvas into view automatically.
+    const beforePointer=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    const clickSurface=beforePointer.rects.find(r=>(r.rgba&255)===195
+      &&((r.rgba>>>8)&255)===145&&((r.rgba>>>16)&255)===105);
+    assert.ok(clickSurface,'Masonry Button surface missing after font switch');
     await canvas.scrollIntoViewIfNeeded();
     const box=await canvas.boundingBox();
     assert.ok(box && box.width>0 && box.height>0);
-    await page.mouse.click(box.x+(brown.x+brown.width/2)*box.width/first.width,
-      box.y+(brown.y+brown.height/2)*box.height/first.height);
-    // Rust action is synchronous; DOM is intentionally committed on requestAnimationFrame.
-    // Wait for BOTH layers to update instead of racing Firefox's next animation frame.
-    await page.waitForFunction(()=>window.__masonryProbe.snapshot().clicks===1,{timeout:10000});
+    const clickPosition={
+      x:(clickSurface.x+clickSurface.width/2)*box.width/beforePointer.width,
+      y:(clickSurface.y+clickSurface.height/2)*box.height/beforePointer.height
+    };
+    assert.ok(clickPosition.x>0&&clickPosition.y>0
+      &&clickPosition.x<box.width&&clickPosition.y<box.height);
+    await canvas.click({position:clickPosition});
+    const afterPointer=await page.evaluate(()=>window.__masonryProbe.snapshot());
+    assert.equal(afterPointer.clicks,1,'Actual browser pointer missed Rust Button: '+
+      JSON.stringify({clickPosition,box,button:clickSurface,
+        width:beforePointer.width,height:beforePointer.height,
+        focused:afterPointer.focusedButton,skipped:afterPointer.skippedDraws}));
+    // DOM label is committed on requestAnimationFrame, not in the pointer callback.
     await page.waitForFunction(()=>document.querySelector('#clicks')?.textContent==='1',{timeout:10000});
     assert.equal(await page.locator('#clicks').textContent(),'1');
 
