@@ -136,6 +136,23 @@ function sceneOps(){
     strokeCap:engine.mp_op_stroke_cap(i)
   }));
 }
+function projectedEditorSelection(){
+  // The live HTML selection is the current browser truth. The 'select'
+  // event is queued by some browsers and may not fire if the native range
+  // is set to its existing value. A cached event is NOT a reliable snapshot
+  // or prerequisite for beginning IME composition.
+  const source=engine.mp_editor_committed_text();
+  let range=null;
+  if(!editorCompositionActive && document.activeElement===textEditor
+      && textEditor.value===source){
+    range={source,start:textEditor.selectionStart,end:textEditor.selectionEnd};
+  }else if(editorStableSelection?.source===source){
+    range=editorStableSelection;
+  }
+  if(!range)return null;
+  return {start:utf16ByteOffset(source,range.start),
+    end:utf16ByteOffset(source,range.end)};
+}
 function snapshot(){
   return {engine:'Rust/Masonry/RenderRoot',
     width:engine.mp_width(),height:engine.mp_height(),
@@ -155,10 +172,7 @@ function snapshot(){
     editorComposing:engine.mp_editor_composing(),
     editorCommits:engine.mp_editor_commits(),
     editorActions:engine.mp_editor_actions(),
-    editorSelectionBytes:editorStableSelection?{
-      start:utf16ByteOffset(editorStableSelection.source,editorStableSelection.start),
-      end:utf16ByteOffset(editorStableSelection.source,editorStableSelection.end)
-    }:null,
+    editorSelectionBytes:projectedEditorSelection(),
     composing:compositionActive||editorCompositionActive,owner:focusOwner()};
 }
 function validateScene(scene){

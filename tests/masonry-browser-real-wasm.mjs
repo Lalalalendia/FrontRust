@@ -464,11 +464,14 @@ for(const [name,runner] of [['chromium',chromium],['firefox',firefox]]){
     assert.equal(selectedCanceled.editorCommits,selectedCommitted.editorCommits,
       'cancel incremented commit count');
     // A composition abandoned by blur must also leave the selected text.
+    // An HTML input may already hold [7,8] after canceled composition.
+    // Setting the same range does NOT guarantee another asynchronous 'select'
+    // event. Assert the actual DOM range; compositionstart itself captures it
+    // and synchronously calls real Rust mp_editor_begin_composition.
     await editor.evaluate(el=>el.setSelectionRange(7,8));
-    await page.waitForFunction(()=>{
-      const selection=window.__masonryProbe.snapshot().editorSelectionBytes;
-      return selection?.start===13&&selection?.end===14;
-    },null,{timeout:5000});
+    assert.deepEqual(await editor.evaluate(el=>[el.selectionStart,el.selectionEnd]),[7,8]);
+    assert.deepEqual(await page.evaluate(()=>
+      window.__masonryProbe.snapshot().editorSelectionBytes),{start:13,end:14});
     await editor.evaluate(el=>{
       el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));
       el.dispatchEvent(new CompositionEvent('compositionupdate',{bubbles:true,data:'仮'}));
